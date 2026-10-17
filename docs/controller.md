@@ -12,7 +12,7 @@
 
 ## 构建与应用
 
-操作流程见根目录 [README](../README.md)。构建时按包体版本检出 MaaEnd 官方标签；MXU 默认使用 `patches/versions.json` 记录的构建参考。未来版本默认尝试兼容，不以已知版本、原始二进制哈希或客户端指纹拦截。实际补丁不能应用时再处理；原生驱动已有其他编辑时不覆盖本地改动。
+普通用户可使用内置运行环境的[一键补丁工具](./one-click.md)。命令行操作流程见根目录 [README](../README.md)。构建时按包体版本检出 MaaEnd 官方标签；MXU 默认使用 `patches/versions.json` 记录的构建参考。未来版本默认尝试兼容，不以已知版本、原始二进制哈希或客户端指纹拦截。实际补丁不能应用时再处理；原生驱动已有其他编辑时不覆盖本地改动。
 
 构建产物位于 `.cache/payloads/<MaaEnd版本>/`，包含 MXU、对应版本 Go Agent 和哈希清单。应用前校验补丁产物完整性，不把目标包版本或原始二进制哈希作为兼容限制。维护者可通过 `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu` 复用已有客户端；此选项由维护者保证二进制来源。
 
@@ -24,7 +24,7 @@ EndPlayDesktop 使用 Windows VK 和 PC 基础资源，不加载 `resource_adb`�
 
 补丁根据 `type=Win32` 查出实际控制器名称，在相关任务及选项的限制列表中追加 EndPlayDesktop；不依赖完整的静态任务清单。`LaunchGamePC` 与 `CloseGamePC` 及其选项始终排除，其他已有控制器限制和选项默认值保留。兼容标记不代表所有任务均已适配或测试。
 
-接口中的 Python 路径指向本仓库 `.venv/bin/python`，项目路径指向本仓库根目录。二者以绝对路径写入目标包，不写入 Git 跟踪文件。不得把 Python 虚拟环境符号链接解析成基础解释器；移动仓库后重新应用补丁。
+命令行应用补丁时，接口中的 Python 路径指向本仓库 `.venv/bin/python`，项目路径指向本仓库根目录。二者以绝对路径写入目标包，不写入 Git 跟踪文件。不得把 Python 虚拟环境符号链接解析成基础解释器；移动仓库后重新应用补丁。一键工具将运行环境安装到用户的 Application Support 目录，使用独立的控制器启动程序，不依赖本仓库或 `.venv`。
 
 ## 输入、截图与清理
 

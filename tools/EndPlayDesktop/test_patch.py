@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from .build_patch import prepare_mxu
 from .patch import (CONTROLLER, RECEIPT, app_info, apply_patch, digest, load_payload,
-                    resource_changes, restore, write_json)
+                    read_json, resource_changes, restore, write_json)
 
 
 class AppPatchTests(unittest.TestCase):
@@ -84,6 +84,17 @@ class AppPatchTests(unittest.TestCase):
         preserved = {**interface, "controller": [c for c in interface["controller"] if c["name"] != CONTROLLER]}
         self.assertEqual(preserved, self.interface)
         self.assertEqual(app_info(self.app)[0], self.info)
+
+    def test_bundled_launcher_works_without_a_virtual_environment(self) -> None:
+        (self.runtime / ".venv/bin/python").unlink()
+        executable = self.root / "Managed Runtime/EndPlayDesktopRuntime"
+        executable.parent.mkdir()
+        executable.write_bytes(b"frozen runtime")
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups, executable)
+        self.assertEqual(result["status"], "applied")
+        interface = read_json(self.directory / "interface.json")
+        controller = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
+        self.assertEqual(controller["endplaydesktop"]["python"], str(executable))
 
     def test_windows_tasks_and_options_expand_but_launch_and_close_are_excluded(self) -> None:
         changes, count = resource_changes(self.directory, self.runtime)

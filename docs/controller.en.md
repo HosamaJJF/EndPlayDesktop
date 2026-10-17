@@ -12,7 +12,7 @@ Pipeline nodes, game resources, business algorithms, original controller setting
 
 ## Building and applying
 
-See the root [README](../README.en.md) for commands. Builds check out the official MaaEnd tag matching the app, while MXU defaults to the build reference in `patches/versions.json`. Future versions are attempted by default, without blocking on known-version lists, original executable hashes, or client fingerprints. Actual patch-application failures are handled when encountered; existing edits to the native driver are not overwritten.
+For normal use, choose the [one-click patch tool](./one-click.en.md) with its bundled runtime. See the root [README](../README.en.md) for CLI commands. Builds check out the official MaaEnd tag matching the app, while MXU defaults to the build reference in `patches/versions.json`. Future versions are attempted by default, without blocking on known-version lists, original executable hashes, or client fingerprints. Actual patch-application failures are handled when encountered; existing edits to the native driver are not overwritten.
 
 Outputs under `.cache/payloads/<MaaEnd version>/` contain MXU, the matching Go Agent, and a hash manifest. Installation verifies payload integrity, without using the target version or original executable hashes as compatibility restrictions. Maintainers can reuse an existing client through `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu`; maintainers are responsible for the binary's provenance with this option.
 
@@ -24,7 +24,7 @@ EndPlayDesktop uses Windows VK codes and PC base resources, without loading `res
 
 The patch discovers controller names from `type=Win32` and appends EndPlayDesktop to matching task and option restriction lists, without a complete static task inventory. `LaunchGamePC`, `CloseGamePC`, and their options remain excluded. Other restrictions and option defaults are retained. Compatibility entries do not establish adaptation or testing of every task.
 
-The interface Python path points to this repository's `.venv/bin/python`, with the project path pointing to its root. Absolute paths are generated in the target app and not stored in tracked Git files. Do not resolve the virtual-environment Python symlink to its base interpreter; reapply the patch after moving the repository.
+When applying through the CLI, the interface Python path points to this repository's `.venv/bin/python`, with the project path pointing to its root. Absolute paths are generated in the target app and not stored in tracked Git files. Do not resolve the virtual-environment Python symlink to its base interpreter; reapply the patch after moving the repository. The one-click tool installs its runtime in the user Application Support directory and uses a standalone controller launcher, without depending on this repository or `.venv`.
 
 ## Input, capture, and cleanup
 

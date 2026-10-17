@@ -100,10 +100,10 @@ def update_filters(value: object, windows: set[str], blocked: bool = False) -> i
     return changed
 
 
-def resource_changes(directory: Path, runtime: Path) -> tuple[dict[Path, dict], int]:
+def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None = None) -> tuple[dict[Path, dict], int]:
     directory = directory.resolve()
     runtime = runtime.resolve()
-    python = runtime / ".venv/bin/python"
+    python = runtime_python.absolute() if runtime_python else runtime / ".venv/bin/python"
     if not python.is_file() or not (runtime / "tools/EndPlayDesktop/sidecar.py").is_file():
         raise ValueError("Missing EndPlayDesktop runtime; run uv sync in its repository first")
     source = documents(directory)
@@ -200,12 +200,13 @@ def swap_app(app: Path, replacement: Path) -> None:
     shutil.rmtree(previous)
 
 
-def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path) -> dict:
+def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
+                runtime_python: Path | None = None) -> dict:
     if running(app):
         raise ValueError("Quit MaaEnd before applying the patch")
     manifest, payload_id = load_payload(payload, app)
     info, directory, version = app_info(app)
-    changes, filters = resource_changes(directory, runtime)
+    changes, filters = resource_changes(directory, runtime, runtime_python)
     existing = read_json(app / RECEIPT) if (app / RECEIPT).exists() else {}
     if existing.get("payload_id") == payload_id and not changes:
         verify_app(app)
