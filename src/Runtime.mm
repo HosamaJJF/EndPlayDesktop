@@ -660,7 +660,7 @@ NSDictionary* Runtime::status() const
         }
         catch (const std::exception& e) { return Error(e.what()); }
     }
-    return @{ @"ok": @YES, @"protocol": @1, @"plugin": @"EndPlayDesktop", @"version": @"0.1.7",
+    return @{ @"ok": @YES, @"protocol": @1, @"plugin": @"EndPlayDesktop", @"version": @"0.0.1",
               @"relative_delta_mode": @"win32_scaled_single_frame",
               @"ready": @(ready()), @"automation": @(s.active), @"width": @(s.width), @"height": @(s.height),
               @"ticks": @(s.ticks), @"input_update_count": @(updates), @"keycode": @"win32_vk",

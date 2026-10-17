@@ -2,6 +2,8 @@
 
 [English](./plugin.en.md)
 
+文中的 `0.1.x` 为公开发布前的内部验证编号；首次公开版本统一为 `0.0.1`，包含这些功能。
+
 终末地 PlayCover 专用 PC UI 与进程内输入插件。本仓库同时维护游戏内 dylib、`tools/EndPlayDesktop/` 控制器与 MaaEnd.app 补丁。
 
 ## 当前范围

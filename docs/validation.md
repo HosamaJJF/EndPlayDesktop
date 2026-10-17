@@ -2,6 +2,8 @@
 
 [English](./validation.en.md)
 
+文中的 `0.1.x` 为公开发布前的内部验证编号；首次公开版本统一为 `0.0.1`，包含这些功能。
+
 2026-10-17，使用原始 MaaEnd.app `v2.33.0`、Apple Silicon 和 EndPlayDesktop `0.1.7` 验证。
 
 ## 构建与单元测试

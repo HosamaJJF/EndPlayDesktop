@@ -2,6 +2,8 @@
 
 [中文](./controller.md)
 
+The `0.1.x` numbers in this document refer to internal builds before publication. The first public version is `0.0.1` and includes these features.
+
 This repository maintains the controller, MaaTools capture client, and MaaEnd.app patch. The game plugin is built separately in the same repository; see the [plugin documentation](./plugin.en.md).
 
 ## Responsibilities

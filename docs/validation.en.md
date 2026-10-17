@@ -2,6 +2,8 @@
 
 [中文](./validation.md)
 
+The `0.1.x` numbers in this document refer to internal builds before publication. The first public version is `0.0.1` and includes these features.
+
 Validated on 2026-10-17 using the original MaaEnd.app `v2.33.0`, Apple Silicon, and EndPlayDesktop `0.1.7`.
 
 ## Builds and unit tests

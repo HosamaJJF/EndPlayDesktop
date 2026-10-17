@@ -2,6 +2,8 @@
 
 [中文](./plugin.md)
 
+The `0.1.x` numbers in this document refer to internal builds before publication. The first public version is `0.0.1` and includes these features.
+
 A PlayCover plugin for Endfield PC UI and in-process input. This repository maintains the game-side dylib, the controller in `tools/EndPlayDesktop/`, and the MaaEnd.app patch.
 
 ## Current scope

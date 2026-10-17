@@ -17,7 +17,7 @@ class PitchFeedback:
         result = bridge.request("camera")
         pitch = result.get("pitch_degrees")
         if not result.get("available") or type(pitch) not in (int, float) or not math.isfinite(pitch):
-            raise BridgeError("无法读取真实相机俯仰；需要 EndPlayDesktop 0.1.7 或更新版本与世界相机")
+            raise BridgeError("无法读取真实相机俯仰；需要 EndPlayDesktop 0.0.1 或更新版本与世界相机")
         return float(pitch)
 
     def _settled(self, bridge: BridgeClient, deadline: float) -> float:

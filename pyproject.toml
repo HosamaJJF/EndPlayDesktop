@@ -1,6 +1,6 @@
 [project]
 name = "endplaydesktop"
-version = "0.1.7"
+version = "0.0.1"
 description = "Endfield PlayCover desktop input and MaaEnd app patch"
 requires-python = ">=3.10"
 dependencies = [

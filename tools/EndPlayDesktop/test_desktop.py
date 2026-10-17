@@ -25,7 +25,7 @@ class DistributionTests(unittest.TestCase):
         source.parent.mkdir(parents=True)
         source.write_text("# actual packaged runtime source")
         write_json(self.resources / "distribution.json", {
-            "version": "0.1.7", "build_id": "test-package", "payloads": ["v2.33.0"],
+            "version": "0.0.1", "build_id": "test-package", "payloads": ["v2.33.0"],
             "default_payload": "v2.33.0",
         })
         with zipfile.ZipFile(self.resources / "payloads.zip", "w") as archive:
