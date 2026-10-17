@@ -42,6 +42,7 @@ application = BUNDLE(collection, name="EndPlayDesktopPatch.app",
                      version=metadata["version"], info_plist={
                          "CFBundleDisplayName": "EndPlayDesktop 补丁工具",
                          "CFBundleShortVersionString": metadata["version"],
+                         "CFBundleVersion": metadata["version"],
                          "NSHighResolutionCapable": True,
                          "LSMinimumSystemVersion": "14.0",
                          "NSHumanReadableCopyright": "EndPlayDesktop contributors. AGPL-3.0.",
