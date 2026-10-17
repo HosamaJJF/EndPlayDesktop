@@ -1,0 +1,1023 @@
+diff --git a/src-tauri/src/commands/maa_agent.rs b/src-tauri/src/commands/maa_agent.rs
+index 1f0d798..8df4dbc 100644
+--- a/src-tauri/src/commands/maa_agent.rs
++++ b/src-tauri/src/commands/maa_agent.rs
+@@ -19,7 +19,7 @@ use maa_framework::controller::Controller;
+ use maa_framework::resource::Resource;
+ use maa_framework::tasker::Tasker;
+ 
+-use super::types::{AgentConfig, ControllerInfo, MaaState, TaskConfig};
++use super::types::{AgentConfig, ControllerConfig, ControllerInfo, MaaState, TaskConfig};
+ use super::utils::{emit_callback_event, get_logs_dir, handle_task_callback, normalize_path};
+ use regex::Regex;
+ use std::sync::LazyLock;
+@@ -570,7 +570,7 @@ pub async fn start_tasks_impl(
+     info!("agent_configs: {:?}", agent_configs);
+     info!("cwd: {}, tcp_compat_mode: {}", cwd, tcp_compat_mode);
+ 
+-    let (resource, controller, tasker) = {
++    let (resource, controller, tasker, endplaydesktop) = {
+         debug!("[start_tasks] Acquiring instances lock...");
+         let mut instances = maa_state.instances.lock().map_err(|e| e.to_string())?;
+         debug!("[start_tasks] Instances lock acquired");
+@@ -651,8 +651,14 @@ pub async fn start_tasks_impl(
+         }
+ 
+         let t = instance.tasker.as_ref().unwrap().clone();
+-        (res, ctrl, t)
++        let endplaydesktop = matches!(
++            instance.controller_config,
++            Some(ControllerConfig::EndPlayDesktop { .. })
++        );
++        (res, ctrl, t, endplaydesktop)
+     };
++    // macOS IPC paths may exceed the UNIX socket length limit.
++    let tcp_compat_mode = tcp_compat_mode || endplaydesktop;
+     debug!("[start_tasks] Resource, controller and tasker acquired, proceeding...");
+ 
+     // 检查 Tasker 初始化状态
+diff --git a/src-tauri/src/commands/maa_core.rs b/src-tauri/src/commands/maa_core.rs
+index c32d227..df2f074 100644
+--- a/src-tauri/src/commands/maa_core.rs
++++ b/src-tauri/src/commands/maa_core.rs
+@@ -950,6 +950,26 @@ pub async fn connect_controller_impl(
+ 
+                 Controller::new_gamepad(hwnd, gp_type, screencap).map_err(|e| e.to_string())?
+             }
++            ControllerConfig::EndPlayDesktop {
++                address,
++                python,
++                project_dir,
++                ..
++            } => {
++                #[cfg(target_os = "macos")]
++                {
++                    super::endplaydesktop::create(
++                        &super::utils::get_exe_directory()?,
++                        python,
++                        project_dir,
++                        address,
++                    )?
++                }
++                #[cfg(not(target_os = "macos"))]
++                {
++                    return Err("EndPlayDesktop controller is only supported on macOS".into());
++                }
++            }
+             ControllerConfig::Linux {
+                 screencap_method,
+                 input_method,
+@@ -1043,6 +1063,9 @@ pub async fn connect_controller_impl(
+             | ControllerConfig::PlayCover {
+                 display_short_side, ..
+             }
++            | ControllerConfig::EndPlayDesktop {
++                display_short_side, ..
++            }
+             | ControllerConfig::Linux {
+                 display_short_side, ..
+             } => display_short_side.unwrap_or(720),
+diff --git a/src-tauri/src/commands/mod.rs b/src-tauri/src/commands/mod.rs
+index 954ebdf..611716b 100644
+--- a/src-tauri/src/commands/mod.rs
++++ b/src-tauri/src/commands/mod.rs
+@@ -19,6 +19,8 @@ pub mod utils;
+ 
+ pub mod app_config;
+ pub mod download;
++#[cfg(target_os = "macos")]
++mod endplaydesktop;
+ pub mod file_ops;
+ pub mod maa_agent;
+ pub mod maa_core;
+diff --git a/src-tauri/src/commands/types.rs b/src-tauri/src/commands/types.rs
+index abe9de5..4a0e043 100644
+--- a/src-tauri/src/commands/types.rs
++++ b/src-tauri/src/commands/types.rs
+@@ -119,6 +119,13 @@ pub enum ControllerConfig {
+         #[serde(default)]
+         display_short_side: Option<i32>,
+     },
++    EndPlayDesktop {
++        address: String,
++        python: String,
++        project_dir: String,
++        #[serde(default)]
++        display_short_side: Option<i32>,
++    },
+     /// Linux 原生控制器（截图：Wlr/PipeWire，输入：Wlr/UInput/Libei）
+     Linux {
+         screencap_method: u64,
+@@ -150,6 +157,29 @@ pub enum ControllerConfig {
+ mod tests {
+     use super::ControllerConfig;
+ 
++    #[test]
++    fn deserializes_endplaydesktop_as_a_separate_controller() {
++        let config: ControllerConfig = serde_json::from_str(
++            r#"{"type":"EndPlayDesktop","address":"127.0.0.1:1718","python":"/venv/bin/python","project_dir":"/project"}"#,
++        ).unwrap();
++        assert!(matches!(
++            config,
++            ControllerConfig::EndPlayDesktop {
++                display_short_side: None,
++                ..
++            }
++        ));
++        assert!(serde_json::from_str::<ControllerConfig>(
++            r#"{"type":"EndPlayDesktop","address":"127.0.0.1:1718"}"#
++        )
++        .is_err());
++        let native: ControllerConfig = serde_json::from_str(
++            r#"{"type":"PlayCover","address":"127.0.0.1:1717","uuid":"maa.endplaydesktop"}"#,
++        )
++        .unwrap();
++        assert!(matches!(native, ControllerConfig::PlayCover { .. }));
++    }
++
+     #[test]
+     fn deserializes_macos_controller_config_with_default_display_short_side() {
+         let config: ControllerConfig = serde_json::from_str(
+diff --git a/src/components/ConnectionPanel.tsx b/src/components/ConnectionPanel.tsx
+index 499d1d7..98e99a9 100644
+--- a/src/components/ConnectionPanel.tsx
++++ b/src/components/ConnectionPanel.tsx
+@@ -24,7 +24,13 @@ import { LinuxInputMethod, parseLinuxInputMethod } from '@/types/maa';
+ import type { AdbDevice, Win32Window, GamescopeInstance, ControllerConfig } from '@/types/maa';
+ import type { ControllerItem, ResourceItem } from '@/types/interface';
+ import { computeResourcePaths } from '@/utils/resourcePath';
+-import { buildPlayCoverControllerConfig } from '@/utils/playCoverController';
++import {
++  buildAddressControllerConfig,
++  defaultControllerAddress,
++  getSavedControllerAddress,
++  isAddressControllerType,
++  savedControllerAddress,
++} from '@/utils/addressController';
+ import {
+   buildDesktopWindowControllerConfig,
+   buildLinuxControllerConfig,
+@@ -87,6 +93,22 @@ export function ConnectionPanel() {
+   // 获取当前活动实例
+   const activeInstance = instances.find((i) => i.id === activeInstanceId);
+ 
++  const instanceId = activeInstanceId || '';
++
++  // 获取控制器列表（已在 interfaceLoader 解析阶段按平台过滤）
++  const controllers = projectInterface?.controller || [];
++  const currentControllerName = selectedController[instanceId] || controllers[0]?.name;
++  const currentController =
++    controllers.find((c) => c.name === currentControllerName) || controllers[0];
++  const controllerType = currentController?.type;
++  const isDesktopWindowController = isDesktopWindowControllerType(controllerType);
++  const { classRegex: desktopWindowClassRegex, titleRegex: desktopWindowTitleRegex } =
++    getDesktopWindowFilters(currentController);
++  const linuxNeeds = controllerType === 'Linux' ? getLinuxDiscoveryNeeds(currentController) : null;
++  const isUinputInput =
++    controllerType === 'Linux' &&
++    parseLinuxInputMethod(currentController?.linux?.input) === LinuxInputMethod.UInput;
++
+   // 获取当前实例的连接和资源状态（从 store）
+   const storedConnectionStatus = activeInstanceId
+     ? instanceConnectionStatus[activeInstanceId]
+@@ -111,9 +133,10 @@ export function ConnectionPanel() {
+     activeInstance?.savedDevice?.uinputScreenHeight?.toString() ?? '',
+   );
+   const [showDeviceDropdown, setShowDeviceDropdown] = useState(false);
+-  // PlayCover 地址从保存的配置初始化
+-  const [playcoverAddress, setPlaycoverAddress] = useState(
+-    activeInstance?.savedDevice?.playcoverAddress || '127.0.0.1:1717',
++  // 地址类控制器从各自的保存配置初始化
++  const [deviceAddress, setDeviceAddress] = useState(
++    getSavedControllerAddress(controllerType, activeInstance?.savedDevice) ||
++      defaultControllerAddress(controllerType),
+   );
+ 
+   // 资源相关状态
+@@ -199,25 +222,10 @@ export function ConnectionPanel() {
+   }, [showDeviceDropdown, showResourceDropdown]);
+ 
+   // 获取当前实例 ID
+-  const instanceId = activeInstanceId || '';
+ 
+   // 任务运行中时禁止切换控制器
+   const isRunning = activeInstance?.isRunning || false;
+ 
+-  // 获取控制器列表（已在 interfaceLoader 解析阶段按平台过滤）
+-  const controllers = projectInterface?.controller || [];
+-  const currentControllerName = selectedController[instanceId] || controllers[0]?.name;
+-  const currentController =
+-    controllers.find((c) => c.name === currentControllerName) || controllers[0];
+-  const controllerType = currentController?.type;
+-  const isDesktopWindowController = isDesktopWindowControllerType(controllerType);
+-  const { classRegex: desktopWindowClassRegex, titleRegex: desktopWindowTitleRegex } =
+-    getDesktopWindowFilters(currentController);
+-  const linuxNeeds = controllerType === 'Linux' ? getLinuxDiscoveryNeeds(currentController) : null;
+-  const isUinputInput =
+-    controllerType === 'Linux' &&
+-    parseLinuxInputMethod(currentController?.linux?.input) === LinuxInputMethod.UInput;
+-
+   // 获取资源列表
+   const allResources = projectInterface?.resource || [];
+ 
+@@ -310,12 +318,10 @@ export function ConnectionPanel() {
+       setSelectedGamescopeInstance(null);
+     }
+ 
+-    // 恢复 PlayCover 地址
+-    if (savedDevice?.playcoverAddress) {
+-      setPlaycoverAddress(savedDevice.playcoverAddress);
+-    } else {
+-      setPlaycoverAddress('127.0.0.1:1717');
+-    }
++    setDeviceAddress(
++      getSavedControllerAddress(controllerType, savedDevice) ||
++        defaultControllerAddress(controllerType),
++    );
+ 
+     // 如果已连接但未展开，自动折叠
+     if (isInstanceConnected && isInstanceResourceLoaded) {
+@@ -323,7 +329,7 @@ export function ConnectionPanel() {
+     } else {
+       setConnectionPanelExpanded(true);
+     }
+-  }, [activeInstanceId]); // eslint-disable-line react-hooks/exhaustive-deps
++  }, [activeInstanceId, currentControllerName]); // eslint-disable-line react-hooks/exhaustive-deps
+ 
+   // 监听 store 中连接状态变化（当 Toolbar 自动连接时同步状态）
+   useEffect(() => {
+@@ -397,15 +403,16 @@ export function ConnectionPanel() {
+           ((savedDevice.gamescopeDisplayNo !== undefined &&
+             (linuxNeeds?.needGamescopeNode || linuxNeeds?.needEisSocket)) ||
+             (savedDevice.wlrSocketPath && linuxNeeds?.needWlrSocket))) ||
+-        (controllerType === 'PlayCover' && savedDevice.playcoverAddress));
++        (isAddressControllerType(controllerType) &&
++          getSavedControllerAddress(controllerType, savedDevice)));
+ 
+     if (hasHistoricalDevice && needsDeviceSearch) {
+       // 标记该实例已尝试过自动重连
+       autoReconnectAttempted.add(instanceId);
+       // 触发搜索并自动连接（handleSearch 内部已有匹配+自动连接逻辑）
+       handleSearch();
+-    } else if (hasHistoricalDevice && controllerType === 'PlayCover') {
+-      // PlayCover 不需要搜索，直接连接
++    } else if (hasHistoricalDevice && isAddressControllerType(controllerType)) {
++      // 地址类控制器不需要搜索，直接连接
+       autoReconnectAttempted.add(instanceId);
+       handleConnect();
+     }
+@@ -680,15 +687,10 @@ export function ConnectionPanel() {
+         };
+         deviceName = selectedWlrootsSocket;
+         targetType = 'device';
+-      } else if (controllerType === 'PlayCover') {
+-        // 保存 PlayCover 地址到实例配置
+-        setInstanceSavedDevice(instanceId, { playcoverAddress });
+-        config = buildPlayCoverControllerConfig(
+-          playcoverAddress,
+-          currentController?.playcover?.uuid,
+-          currentController?.display_short_side,
+-        );
+-        deviceName = playcoverAddress;
++      } else if (isAddressControllerType(controllerType)) {
++        setInstanceSavedDevice(instanceId, savedControllerAddress(controllerType, deviceAddress));
++        config = buildAddressControllerConfig(currentController, deviceAddress);
++        deviceName = deviceAddress;
+         targetType = 'device';
+       } else {
+         throw new Error(
+@@ -822,6 +824,7 @@ export function ConnectionPanel() {
+         return <Monitor className="w-4 h-4" />;
+       case 'MacOS':
+       case 'PlayCover':
++      case 'EndPlayDesktop':
+         return <Apple className="w-4 h-4" />;
+       case 'Gamepad':
+         return <Gamepad2 className="w-4 h-4" />;
+@@ -1367,7 +1370,7 @@ export function ConnectionPanel() {
+     if (controllerType === 'Linux') {
+       return isLinuxReadyWith(selectedGamescopeInstance, selectedWlrootsSocket);
+     }
+-    if (controllerType === 'PlayCover') return playcoverAddress.trim().length > 0;
++    if (isAddressControllerType(controllerType)) return deviceAddress.trim().length > 0;
+     return false;
+   };
+ 
+@@ -1420,9 +1423,8 @@ export function ConnectionPanel() {
+       if (savedDevice?.gamescopeDisplayNo !== undefined) {
+         return `gamescope-${savedDevice.gamescopeDisplayNo}`;
+       }
+-      if (savedDevice?.playcoverAddress) {
+-        return truncateText(savedDevice.playcoverAddress, 6);
+-      }
++      const address = getSavedControllerAddress(controllerType, savedDevice);
++      if (address) return truncateText(address, 6);
+       // 没有设备名时回退到控制器名称
+       if (currentController) {
+         return getControllerDisplayName(currentController);
+@@ -1442,7 +1444,7 @@ export function ConnectionPanel() {
+           ((s.gamescopeDisplayNo !== undefined &&
+             (linuxNeeds?.needGamescopeNode || linuxNeeds?.needEisSocket)) ||
+             (s.wlrSocketPath && linuxNeeds?.needWlrSocket))) ||
+-        s.playcoverAddress
++        getSavedControllerAddress(controllerType, s)
+       );
+     };
+ 
+@@ -1641,14 +1643,14 @@ export function ConnectionPanel() {
+               </div>
+             )}
+ 
+-            {/* PlayCover 地址输入和连接按钮 */}
+-            {controllerType === 'PlayCover' && (
++            {/* 地址输入和连接按钮 */}
++            {isAddressControllerType(controllerType) && (
+               <div className="flex gap-2">
+                 <input
+                   type="text"
+-                  value={playcoverAddress}
+-                  onChange={(e) => setPlaycoverAddress(e.target.value)}
+-                  placeholder="127.0.0.1:1717"
++                  value={deviceAddress}
++                  onChange={(e) => setDeviceAddress(e.target.value)}
++                  placeholder={defaultControllerAddress(controllerType)}
+                   disabled={isConnected || isConnecting || isRunning}
+                   className={clsx(
+                     'flex-1 min-w-0 px-2.5 py-1.5 rounded-md border bg-bg-tertiary border-border text-sm',
+diff --git a/src/components/DashboardView.tsx b/src/components/DashboardView.tsx
+index 29dac3e..b5e7fa7 100644
+--- a/src/components/DashboardView.tsx
++++ b/src/components/DashboardView.tsx
+@@ -152,8 +152,10 @@ function InstanceCard({ instanceId, instanceName, isActive, onSelect }: Instance
+       );
+     } else if (savedDevice?.wlrSocketPath) {
+       deviceName = savedDevice.wlrSocketPath;
+-    } else if (savedDevice?.playcoverAddress) {
+-      deviceName = savedDevice.playcoverAddress;
++    } else if (currentController?.type === 'EndPlayDesktop') {
++      deviceName = savedDevice?.endplaydesktopAddress || '';
++    } else if (currentController?.type === 'PlayCover') {
++      deviceName = savedDevice?.playcoverAddress || '';
+     }
+ 
+     const controllerLabel = currentController
+diff --git a/src/components/DeviceSelector.tsx b/src/components/DeviceSelector.tsx
+index 2546c91..df43418 100644
+--- a/src/components/DeviceSelector.tsx
++++ b/src/components/DeviceSelector.tsx
+@@ -1,3 +1,8 @@
++import {
++  buildAddressControllerConfig,
++  defaultControllerAddress,
++  isAddressControllerType,
++} from '@/utils/addressController';
+ import { useState, useEffect, useRef, useCallback } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import {
+@@ -110,7 +115,11 @@ export function DeviceSelector({
+     getDesktopWindowFilters(controllerDef);
+ 
+   // PlayCover 地址输入
+-  const [playcoverAddress, setPlaycoverAddress] = useState('127.0.0.1:1717');
++  const [deviceAddress, setDeviceAddress] = useState(defaultControllerAddress(controllerType));
++
++  useEffect(() => {
++    setDeviceAddress(defaultControllerAddress(controllerType));
++  }, [controllerDef.name, controllerType]);
+ 
+   // 监听 MaaFramework 回调事件，处理连接完成
+   useEffect(() => {
+@@ -256,12 +265,8 @@ export function DeviceSelector({
+           wlr_socket_path: selectedWlrootsSocket,
+           use_win32_vk_code: controllerDef.wlroots?.use_win32_vk_code ?? false,
+         };
+-      } else if (controllerType === 'PlayCover') {
+-        config = {
+-          type: 'PlayCover',
+-          address: playcoverAddress,
+-          display_short_side: controllerDef.display_short_side,
+-        };
++      } else if (isAddressControllerType(controllerType)) {
++        config = buildAddressControllerConfig(controllerDef, deviceAddress);
+       } else {
+         throw new Error('请先选择设备');
+       }
+@@ -280,8 +285,8 @@ export function DeviceSelector({
+       } else if (controllerType === 'WlRoots' && selectedWlrootsSocket) {
+         deviceName = selectedWlrootsSocket;
+         targetType = 'device';
+-      } else if (controllerType === 'PlayCover') {
+-        deviceName = playcoverAddress;
++      } else if (isAddressControllerType(controllerType)) {
++        deviceName = deviceAddress;
+         targetType = 'device';
+       }
+       registerCtrlIdName(instanceId, ctrlId, deviceName, targetType);
+@@ -481,7 +486,7 @@ export function DeviceSelector({
+     if (controllerType === 'Adb') return !!selectedAdbDevice;
+     if (isDesktopWindowController) return !!selectedWindow;
+     if (controllerType === 'WlRoots') return !!selectedWlrootsSocket;
+-    if (controllerType === 'PlayCover') return playcoverAddress.trim().length > 0;
++    if (isAddressControllerType(controllerType)) return deviceAddress.trim().length > 0;
+     return false;
+   };
+ 
+@@ -496,6 +501,7 @@ export function DeviceSelector({
+       case 'WlRoots':
+         return <Monitor className="w-4 h-4" />;
+       case 'MacOS':
++      case 'EndPlayDesktop':
+       case 'PlayCover':
+         return <Apple className="w-4 h-4" />;
+       case 'Gamepad':
+@@ -514,6 +520,8 @@ export function DeviceSelector({
+         return t('controller.win32');
+       case 'WlRoots':
+         return t('controller.wlroots');
++      case 'EndPlayDesktop':
++        return t('controller.endplaydesktop');
+       case 'PlayCover':
+         return t('controller.playcover');
+       case 'MacOS':
+@@ -540,17 +548,23 @@ export function DeviceSelector({
+       </div>
+ 
+       {/* PlayCover 地址输入 */}
+-      {controllerType === 'PlayCover' && (
++      {isAddressControllerType(controllerType) && (
+         <div className="space-y-2">
+           <div className="flex items-center gap-2 text-sm text-text-muted">
+             <Info className="w-3 h-3" />
+-            <span>{t('controller.playcoverHint')}</span>
++            <span>
++              {t(
++                controllerType === 'EndPlayDesktop'
++                  ? 'controller.endplaydesktopHint'
++                  : 'controller.playcoverHint',
++              )}
++            </span>
+           </div>
+           <input
+             type="text"
+-            value={playcoverAddress}
+-            onChange={(e) => setPlaycoverAddress(e.target.value)}
+-            placeholder="127.0.0.1:1717"
++            value={deviceAddress}
++            onChange={(e) => setDeviceAddress(e.target.value)}
++            placeholder={defaultControllerAddress(controllerType)}
+             disabled={isConnected || isConnecting}
+             className={clsx(
+               'w-full px-3 py-2.5 rounded-lg border bg-bg-tertiary border-border',
+@@ -687,7 +701,7 @@ export function DeviceSelector({
+       )}
+ 
+       {/* PlayCover 需要手动连接按钮 */}
+-      {controllerType === 'PlayCover' && !isConnected && (
++      {isAddressControllerType(controllerType) && !isConnected && (
+         <button
+           onClick={handleConnect}
+           disabled={isConnecting || !canConnect()}
+diff --git a/src/components/Toolbar.tsx b/src/components/Toolbar.tsx
+index 505ea10..0e89c94 100644
+--- a/src/components/Toolbar.tsx
++++ b/src/components/Toolbar.tsx
+@@ -42,7 +42,11 @@ import {
+   getLinuxDiscoveryNeeds,
+   isDesktopWindowControllerType,
+ } from '@/utils/controller';
+-import { buildPlayCoverControllerConfig } from '@/utils/playCoverController';
++import {
++  buildAddressControllerConfig,
++  getSavedControllerAddress,
++  isAddressControllerType,
++} from '@/utils/addressController';
+ import { SchedulePanel } from './SchedulePanel';
+ import type {
+   Instance,
+@@ -442,7 +446,7 @@ export function Toolbar({ showAddPanel, onToggleAddPanel, className }: ToolbarPr
+         (savedDevice.adbDeviceName ||
+           savedDevice.windowName ||
+           savedDevice.wlrSocketPath ||
+-          savedDevice.playcoverAddress),
++          getSavedControllerAddress(controller?.type, savedDevice)),
+       );
+       if (!controller) {
+         return failStart(t('errors.controllerNotFound'));
+@@ -678,7 +682,7 @@ export function Toolbar({ showAddPanel, onToggleAddPanel, className }: ToolbarPr
+                   !savedDevice?.windowName &&
+                   !savedDevice?.adbDeviceName &&
+                   !savedDevice?.wlrSocketPath &&
+-                  !savedDevice?.playcoverAddress
++                  !getSavedControllerAddress(controllerType, savedDevice)
+                 ) {
+                   try {
+                     if (controllerType === 'Adb') {
+@@ -835,13 +839,13 @@ export function Toolbar({ showAddPanel, onToggleAddPanel, className }: ToolbarPr
+               };
+               deviceName = savedDevice.wlrSocketPath;
+               targetType = 'device';
+-            } else if (controllerType === 'PlayCover' && savedDevice.playcoverAddress) {
+-              config = buildPlayCoverControllerConfig(
+-                savedDevice.playcoverAddress,
+-                controller.playcover?.uuid,
+-                controller.display_short_side,
+-              );
+-              deviceName = savedDevice.playcoverAddress;
++            } else if (
++              isAddressControllerType(controllerType) &&
++              getSavedControllerAddress(controllerType, savedDevice)
++            ) {
++              const address = getSavedControllerAddress(controllerType, savedDevice)!;
++              config = buildAddressControllerConfig(controller, address);
++              deviceName = address;
+               targetType = 'device';
+             } else if (controllerType === 'Linux') {
+               const found = await discoverLinuxControllerConfig(controller, savedDevice, {
+@@ -923,8 +927,8 @@ export function Toolbar({ showAddPanel, onToggleAddPanel, className }: ToolbarPr
+               };
+               deviceName = firstSocket;
+               targetType = 'device';
+-            } else if (controllerType === 'PlayCover') {
+-              // PlayCover 没有搜索功能，无法自动连接
++            } else if (isAddressControllerType(controllerType)) {
++              // 地址类控制器需要保存的连接地址
+               return failStart(t('taskList.autoConnect.needConfig'));
+             } else if (controllerType === 'Linux') {
+               const found = await discoverLinuxControllerConfig(controller, undefined, {
+diff --git a/src/components/connection/useDeviceConnection.ts b/src/components/connection/useDeviceConnection.ts
+index 9a9d697..eefa80c 100644
+--- a/src/components/connection/useDeviceConnection.ts
++++ b/src/components/connection/useDeviceConnection.ts
+@@ -1,4 +1,4 @@
+-import { useState, useCallback, useRef } from 'react';
++import { useState, useCallback, useRef, useEffect } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { maaService } from '@/services/maaService';
+ import { useAppStore } from '@/stores/appStore';
+@@ -9,7 +9,13 @@ import {
+   getDesktopWindowFilters,
+   isDesktopWindowControllerType,
+ } from '@/utils/controller';
+-import { buildPlayCoverControllerConfig } from '@/utils/playCoverController';
++import {
++  buildAddressControllerConfig,
++  defaultControllerAddress,
++  getSavedControllerAddress,
++  isAddressControllerType,
++  savedControllerAddress,
++} from '@/utils/addressController';
+ import { startGlobalCallbackListener, waitForCtrlResult } from './callbackCache';
+ 
+ interface UseDeviceConnectionProps {
+@@ -48,9 +54,16 @@ export function useDeviceConnection({
+   const [selectedWindow, setSelectedWindow] = useState<Win32Window | null>(null);
+   const [selectedWlrootsSocket, setSelectedWlrootsSocket] = useState<string | null>(null);
+   const [showDeviceDropdown, setShowDeviceDropdown] = useState(false);
+-  const [playcoverAddress, setPlaycoverAddress] = useState(
+-    activeInstance?.savedDevice?.playcoverAddress || '127.0.0.1:1717',
++  const [deviceAddress, setDeviceAddress] = useState(
++    getSavedControllerAddress(controllerType, activeInstance?.savedDevice) ||
++      defaultControllerAddress(controllerType),
+   );
++  useEffect(() => {
++    setDeviceAddress(
++      getSavedControllerAddress(controllerType, activeInstance?.savedDevice) ||
++        defaultControllerAddress(controllerType),
++    );
++  }, [instanceId, currentController?.name]); // eslint-disable-line react-hooks/exhaustive-deps
+   const isDesktopWindowController = isDesktopWindowControllerType(controllerType);
+   const { classRegex: desktopWindowClassRegex, titleRegex: desktopWindowTitleRegex } =
+     getDesktopWindowFilters(currentController);
+@@ -344,8 +357,9 @@ export function useDeviceConnection({
+     ],
+   );
+ 
+-  // PlayCover 连接
+-  const handleConnectPlayCover = useCallback(async () => {
++  // 通过地址连接
++  const handleConnectAddressController = useCallback(async () => {
++    if (!currentController || !isAddressControllerType(controllerType)) return;
+     setIsConnecting(true);
+     setDeviceError(null);
+ 
+@@ -357,15 +371,14 @@ export function useDeviceConnection({
+ 
+       await maaService.createInstance(instanceId).catch(() => {});
+ 
+-      setInstanceSavedDevice(instanceId, { playcoverAddress });
++      setInstanceSavedDevice(instanceId, savedControllerAddress(controllerType, deviceAddress));
+ 
+-      const config: ControllerConfig = buildPlayCoverControllerConfig(
+-        playcoverAddress,
+-        currentController?.playcover?.uuid,
+-        currentController?.display_short_side,
++      const config: ControllerConfig = buildAddressControllerConfig(
++        currentController,
++        deviceAddress,
+       );
+ 
+-      await connectControllerInternal(config, playcoverAddress, 'device');
++      await connectControllerInternal(config, deviceAddress, 'device');
+     } catch (err) {
+       setDeviceError(err instanceof Error ? err.message : t('controller.connectionFailed'));
+       setIsConnected(false);
+@@ -374,8 +387,9 @@ export function useDeviceConnection({
+     }
+   }, [
+     instanceId,
+-    playcoverAddress,
+-    currentController?.playcover?.uuid,
++    deviceAddress,
++    currentController,
++    controllerType,
+     setInstanceSavedDevice,
+     setInstanceConnectionStatus,
+     connectControllerInternal,
+@@ -429,7 +443,7 @@ export function useDeviceConnection({
+     if (controllerType === 'Adb') return !!selectedAdbDevice;
+     if (isDesktopWindowController) return !!selectedWindow;
+     if (controllerType === 'WlRoots') return !!selectedWlrootsSocket;
+-    if (controllerType === 'PlayCover') return playcoverAddress.trim().length > 0;
++    if (isAddressControllerType(controllerType)) return deviceAddress.trim().length > 0;
+     return false;
+   }, [
+     controllerType,
+@@ -437,7 +451,7 @@ export function useDeviceConnection({
+     selectedAdbDevice,
+     selectedWindow,
+     selectedWlrootsSocket,
+-    playcoverAddress,
++    deviceAddress,
+   ]);
+ 
+   return {
+@@ -449,7 +463,7 @@ export function useDeviceConnection({
+     selectedAdbDevice,
+     selectedWindow,
+     showDeviceDropdown,
+-    playcoverAddress,
++    deviceAddress,
+     cachedAdbDevices,
+     cachedWin32Windows,
+     cachedWlrootsSockets,
+@@ -463,12 +477,12 @@ export function useDeviceConnection({
+     setSelectedAdbDevice,
+     setSelectedWindow,
+     setShowDeviceDropdown,
+-    setPlaycoverAddress,
++    setDeviceAddress,
+     // Actions
+     handleSearch,
+     handleSelectAdbDevice,
+     handleSelectWindow,
+-    handleConnectPlayCover,
++    handleConnectAddressController,
+     getSelectedDeviceText,
+     canConnect,
+     ensureMaaInitialized,
+diff --git a/src/i18n/locales/en-US.ts b/src/i18n/locales/en-US.ts
+index dd052f0..0c9be14 100644
+--- a/src/i18n/locales/en-US.ts
++++ b/src/i18n/locales/en-US.ts
+@@ -413,6 +413,9 @@ export default {
+     uinputWidth: 'Width (px)',
+     uinputHeight: 'Height (px)',
+     playcover: 'PlayCover (macOS)',
++    endplaydesktop: 'EndPlayDesktop (macOS)',
++    endplaydesktopHint:
++      'Enter the MaaTools address; load EndPlayDesktop in the game and keep its window visible',
+     macos: 'macOS Window',
+     macosPermissionsRequired:
+       'Screen Recording and Accessibility permissions are required. Grant them in macOS System Settings under Privacy & Security, then try again.',
+diff --git a/src/i18n/locales/ja-JP.ts b/src/i18n/locales/ja-JP.ts
+index 52e6a68..0a8c3a6 100644
+--- a/src/i18n/locales/ja-JP.ts
++++ b/src/i18n/locales/ja-JP.ts
+@@ -408,6 +408,9 @@ export default {
+     uinputWidth: '幅 (px)',
+     uinputHeight: '高さ (px)',
+     playcover: 'PlayCover (macOS)',
++    endplaydesktop: 'EndPlayDesktop (macOS)',
++    endplaydesktopHint:
++      'MaaTools アドレスを入力。ゲームに EndPlayDesktop を読み込み、ウィンドウを表示してください',
+     macos: 'macOS ウィンドウ',
+     macosPermissionsRequired:
+       '画面収録とアクセシビリティの権限が必要です。macOSの「システム設定」>「プライバシーとセキュリティ」で許可してから、もう一度お試しください。',
+diff --git a/src/i18n/locales/ko-KR.ts b/src/i18n/locales/ko-KR.ts
+index 0491740..8ea7339 100644
+--- a/src/i18n/locales/ko-KR.ts
++++ b/src/i18n/locales/ko-KR.ts
+@@ -403,6 +403,9 @@ export default {
+     uinputWidth: '너비 (px)',
+     uinputHeight: '높이 (px)',
+     playcover: 'PlayCover (macOS)',
++    endplaydesktop: 'EndPlayDesktop (macOS)',
++    endplaydesktopHint:
++      'MaaTools 주소를 입력하세요. 게임에 EndPlayDesktop을 로드하고 창을 표시해 주세요',
+     macos: 'macOS 창',
+     macosPermissionsRequired:
+       '화면 기록 및 손쉬운 사용 권한이 필요합니다. macOS 시스템 설정의 개인정보 보호 및 보안에서 권한을 허용한 후 다시 시도하세요.',
+diff --git a/src/i18n/locales/zh-CN.ts b/src/i18n/locales/zh-CN.ts
+index cdbca16..963c4e4 100644
+--- a/src/i18n/locales/zh-CN.ts
++++ b/src/i18n/locales/zh-CN.ts
+@@ -400,6 +400,8 @@ export default {
+     uinputWidth: '宽 (px)',
+     uinputHeight: '高 (px)',
+     playcover: 'PlayCover (macOS)',
++    endplaydesktop: 'EndPlayDesktop (macOS)',
++    endplaydesktopHint: '输入 MaaTools 地址；游戏需加载 EndPlayDesktop 插件并保持窗口显示',
+     macos: 'macOS 窗口',
+     macosPermissionsRequired:
+       '需要授予屏幕录制和辅助功能权限。请在 macOS“系统设置”的“隐私与安全性”中授权后重试。',
+diff --git a/src/i18n/locales/zh-TW.ts b/src/i18n/locales/zh-TW.ts
+index fa4098b..cb1b9b2 100644
+--- a/src/i18n/locales/zh-TW.ts
++++ b/src/i18n/locales/zh-TW.ts
+@@ -396,6 +396,8 @@ export default {
+     uinputWidth: '寬 (px)',
+     uinputHeight: '高 (px)',
+     playcover: 'PlayCover (macOS)',
++    endplaydesktop: 'EndPlayDesktop (macOS)',
++    endplaydesktopHint: '輸入 MaaTools 位址；遊戲需載入 EndPlayDesktop 外掛並保持視窗顯示',
+     macos: 'macOS 視窗',
+     macosPermissionsRequired:
+       '需要授予螢幕錄製和輔助使用權限。請在 macOS「系統設定」的「隱私權與安全性」中授權後重試。',
+diff --git a/src/services/interfaceLoader.ts b/src/services/interfaceLoader.ts
+index aa3744c..207b52c 100644
+--- a/src/services/interfaceLoader.ts
++++ b/src/services/interfaceLoader.ts
+@@ -372,6 +372,7 @@ function getUnsupportedControllerTypes(os: string): Set<ControllerType> {
+   if (!isMacOS) {
+     unsupported.add('MacOS');
+     unsupported.add('PlayCover');
++    unsupported.add('EndPlayDesktop');
+   }
+   // 非 Linux 系统不支持 WlRoots 和 Linux 控制器
+   if (!isLinux) {
+diff --git a/src/types/config.ts b/src/types/config.ts
+index 0931274..c413dec 100644
+--- a/src/types/config.ts
++++ b/src/types/config.ts
+@@ -41,6 +41,7 @@ export interface SavedDeviceInfo {
+   wlrSocketPath?: string;
+   // PlayCover：保存地址
+   playcoverAddress?: string;
++  endplaydesktopAddress?: string;
+   /** Win32 连接窗口对应的进程可执行文件路径 */
+   connectedProgramPath?: string;
+ }
+diff --git a/src/types/interface.ts b/src/types/interface.ts
+index 523f5b7..0ebc2e6 100644
+--- a/src/types/interface.ts
++++ b/src/types/interface.ts
+@@ -143,6 +143,7 @@ export type ControllerType =
+   | 'WlRoots'
+   | 'Linux'
+   | 'PlayCover'
++  | 'EndPlayDesktop'
+   | 'Gamepad';
+ 
+ export interface ControllerItem {
+@@ -165,6 +166,7 @@ export interface ControllerItem {
+   wlroots?: WlRootsConfig;
+   linux?: LinuxConfig;
+   playcover?: PlayCoverConfig;
++  endplaydesktop?: EndPlayDesktopConfig;
+   gamepad?: GamepadConfig;
+ }
+ 
+@@ -194,6 +196,12 @@ export interface LinuxConfig {
+   pipewire_source?: 'Gamescope' | 'Portal';
+ }
+ 
++/** Local extension: in-process PC input in a PlayCover game. */
++export interface EndPlayDesktopConfig {
++  python: string;
++  project_dir: string;
++}
++
+ export interface PlayCoverConfig {
+   uuid?: string;
+ }
+@@ -386,6 +394,7 @@ export interface SavedDeviceInfo {
+   windowName?: string;
+   wlrSocketPath?: string;
+   playcoverAddress?: string;
++  endplaydesktopAddress?: string;
+   /** Linux 控制器：gamescope display 号（gamescope-<n> 的 n，节点 id 会随会话变化，故存 display 号） */
+   gamescopeDisplayNo?: number;
+   /** Linux 控制器：uinput 输入的物理屏幕分辨率（宽/高） */
+diff --git a/src/types/maa.ts b/src/types/maa.ts
+index b5e23cd..71fd16a 100644
+--- a/src/types/maa.ts
++++ b/src/types/maa.ts
+@@ -88,6 +88,15 @@ export interface PlayCoverControllerConfig {
+   display_short_side?: number;
+ }
+ 
++/** EndPlayDesktop 控制器配置 (macOS) */
++export interface EndPlayDesktopControllerConfig {
++  type: 'EndPlayDesktop';
++  address: string;
++  python: string;
++  project_dir: string;
++  display_short_side?: number;
++}
++
+ /** Gamepad 控制器配置 */
+ export interface GamepadControllerConfig {
+   type: 'Gamepad';
+@@ -103,6 +112,7 @@ export type ControllerConfig =
+   | WlRootsControllerConfig
+   | LinuxControllerConfig
+   | PlayCoverControllerConfig
++  | EndPlayDesktopControllerConfig
+   | GamepadControllerConfig;
+ 
+ /** 连接状态 */
+diff --git a/src/utils/addressController.ts b/src/utils/addressController.ts
+new file mode 100644
+index 0000000..f6c2faa
+--- /dev/null
++++ b/src/utils/addressController.ts
+@@ -0,0 +1,52 @@
++import type { ControllerItem, ControllerType } from '@/types/interface';
++import type { SavedDeviceInfo } from '@/types/config';
++import type { EndPlayDesktopControllerConfig, PlayCoverControllerConfig } from '@/types/maa';
++import { buildPlayCoverControllerConfig } from './playCoverController';
++
++export function isAddressControllerType(
++  type: ControllerType | undefined,
++): type is 'PlayCover' | 'EndPlayDesktop' {
++  return type === 'PlayCover' || type === 'EndPlayDesktop';
++}
++
++export function getSavedControllerAddress(
++  type: ControllerType | undefined,
++  savedDevice: SavedDeviceInfo | undefined,
++): string | undefined {
++  if (type === 'PlayCover') return savedDevice?.playcoverAddress;
++  if (type === 'EndPlayDesktop') return savedDevice?.endplaydesktopAddress;
++  return undefined;
++}
++
++export function savedControllerAddress(
++  type: 'PlayCover' | 'EndPlayDesktop',
++  address: string,
++): SavedDeviceInfo {
++  return type === 'EndPlayDesktop'
++    ? { endplaydesktopAddress: address }
++    : { playcoverAddress: address };
++}
++
++export function defaultControllerAddress(type: ControllerType | undefined): string {
++  return type === 'EndPlayDesktop' ? '127.0.0.1:1718' : '127.0.0.1:1717';
++}
++
++export function buildAddressControllerConfig(
++  controller: ControllerItem,
++  address: string,
++): EndPlayDesktopControllerConfig | PlayCoverControllerConfig {
++  if (controller.type === 'EndPlayDesktop') {
++    return {
++      type: 'EndPlayDesktop',
++      address,
++      python: controller.endplaydesktop?.python ?? '',
++      project_dir: controller.endplaydesktop?.project_dir ?? '',
++      display_short_side: controller.display_short_side,
++    };
++  }
++  return buildPlayCoverControllerConfig(
++    address,
++    controller.playcover?.uuid,
++    controller.display_short_side,
++  );
++}
+diff --git a/src/utils/controller.ts b/src/utils/controller.ts
+index 27af5f1..bd17fb6 100644
+--- a/src/utils/controller.ts
++++ b/src/utils/controller.ts
+@@ -119,6 +119,7 @@ const WORKSTATION_UNLOCK_REQUIREMENT: Record<ControllerType, boolean> = {
+   WlRoots: false,
+   Linux: false,
+   PlayCover: false,
++  EndPlayDesktop: false,
+   Gamepad: true,
+ };
+ 
+diff --git a/src/utils/useMaaCallbackLogger.ts b/src/utils/useMaaCallbackLogger.ts
+index 0e3c055..57bb4da 100644
+--- a/src/utils/useMaaCallbackLogger.ts
++++ b/src/utils/useMaaCallbackLogger.ts
+@@ -224,6 +224,8 @@ function inferCtrlInfoFromInstance(
+       labels,
+     );
+     return { type: 'device', name };
++  } else if (controller.type === 'EndPlayDesktop') {
++    return { type: 'device', name: savedDevice?.endplaydesktopAddress };
+   } else if (controller.type === 'PlayCover') {
+     return { type: 'device', name: savedDevice?.playcoverAddress };
+   }
+diff --git a/tests/addressController.test.ts b/tests/addressController.test.ts
+new file mode 100644
+index 0000000..6bc9088
+--- /dev/null
++++ b/tests/addressController.test.ts
+@@ -0,0 +1,60 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import {
++  buildAddressControllerConfig,
++  defaultControllerAddress,
++  getSavedControllerAddress,
++  savedControllerAddress,
++} from '../src/utils/addressController.ts';
++
++test('EndPlayDesktop is a separate controller with explicit runtime paths', () => {
++  assert.deepEqual(
++    buildAddressControllerConfig(
++      {
++        name: 'EndPlayDesktop',
++        type: 'EndPlayDesktop',
++        display_short_side: 720,
++        endplaydesktop: { python: '/venv/bin/python', project_dir: '/project' },
++      },
++      '127.0.0.1:1718',
++    ),
++    {
++      type: 'EndPlayDesktop',
++      address: '127.0.0.1:1718',
++      python: '/venv/bin/python',
++      project_dir: '/project',
++      display_short_side: 720,
++    },
++  );
++});
++
++test('PlayCover keeps its native type even with the former reserved UUID', () => {
++  assert.deepEqual(
++    buildAddressControllerConfig(
++      { name: 'PlayCover', type: 'PlayCover', playcover: { uuid: 'maa.endplaydesktop' } },
++      '127.0.0.1:1717',
++    ),
++    {
++      type: 'PlayCover',
++      address: '127.0.0.1:1717',
++      uuid: 'maa.endplaydesktop',
++      display_short_side: undefined,
++    },
++  );
++});
++
++test('address persistence and defaults are independent for the two controllers', () => {
++  const saved = {
++    ...savedControllerAddress('PlayCover', 'playcover:1717'),
++    ...savedControllerAddress('EndPlayDesktop', 'desktop:1718'),
++  };
++  assert.equal(getSavedControllerAddress('PlayCover', saved), 'playcover:1717');
++  assert.equal(getSavedControllerAddress('EndPlayDesktop', saved), 'desktop:1718');
++  assert.equal(getSavedControllerAddress('MacOS', saved), undefined);
++  assert.equal(
++    getSavedControllerAddress('EndPlayDesktop', { playcoverAddress: 'old:1717' }),
++    undefined,
++  );
++  assert.equal(defaultControllerAddress('EndPlayDesktop'), '127.0.0.1:1718');
++  assert.equal(defaultControllerAddress('PlayCover'), '127.0.0.1:1717');
++});
+diff --git a/tests/piEnv.test.ts b/tests/piEnv.test.ts
+new file mode 100644
+index 0000000..f79b3f2
+--- /dev/null
++++ b/tests/piEnv.test.ts
+@@ -0,0 +1,30 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import type { ControllerItem, ProjectInterface } from '../src/types/interface.ts';
++
++test('PI_CONTROLLER preserves the declared controller type for agents', async () => {
++  Object.defineProperty(globalThis, 'localStorage', {
++    configurable: true,
++    value: { getItem: () => null },
++  });
++  const { buildPiEnvVars } = await import('../src/utils/piEnv.ts');
++  Reflect.deleteProperty(globalThis, 'localStorage');
++  for (const controller of [
++    {
++      name: 'EndPlayDesktop',
++      type: 'EndPlayDesktop',
++      endplaydesktop: { python: '/python', project_dir: '/project' },
++    },
++    { name: 'PlayCover', type: 'PlayCover', playcover: { uuid: 'maa.endplaydesktop' } },
++  ] as ControllerItem[]) {
++    const env = buildPiEnvVars({
++      projectInterface: { controller: [controller], resource: [] } as unknown as ProjectInterface,
++      controllerName: controller.name,
++      resourceName: undefined,
++      translations: undefined,
++      language: 'zh-CN',
++      maaVersion: null,
++    });
++    assert.deepEqual(JSON.parse(env.PI_CONTROLLER), controller);
++  }
++});

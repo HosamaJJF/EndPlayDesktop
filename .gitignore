@@ -1,0 +1,11 @@
+/build/
+/build-*/
+/backups/
+/.cache/
+/.venv/
+__pycache__/
+*.pyc
+*.dylib
+.DS_Store
+._*
+.AppleDouble

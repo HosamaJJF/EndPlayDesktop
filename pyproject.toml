@@ -1,0 +1,14 @@
+[project]
+name = "endplaydesktop"
+version = "0.1.7"
+description = "Endfield PlayCover desktop input and MaaEnd app patch"
+requires-python = ">=3.10"
+dependencies = [
+    "json5>=0.12,<1",
+    "maafw>=5.15.0b1,<6",
+    "numpy>=2,<3",
+    "Pillow>=12,<13",
+]
+
+[tool.uv]
+package = false
