@@ -2,87 +2,50 @@
 
 [中文](./README.md)
 
-Provides PC UI and in-process keyboard/mouse input for Arknights: Endfield in PlayCover, with a local patch that adds an EndPlayDesktop controller to MaaEnd. This project is maintained independently, with no current upstream submission to MaaEnd or MXU.
+Injects PC UI changes and in-process keyboard/mouse input into Arknights: Endfield running in PlayCover, and patches MaaEnd to add an EndPlayDesktop controller so Windows-controller tasks can run in PlayCover. This project is maintained independently of MaaEnd and MXU. It requires the community [PlayCover fork](https://github.com/hguandl/PlayCover/releases) with MaaTool support.
 
-> This README is a draft framework. The maintainer will add installation screenshots, compatibility versions, and release notes.
+The plugin injects changes into the game. Do not use this project if you are concerned about the risks. This project accepts no responsibility for any resulting loss or penalty affecting your game account.
 
-## Project contents
+## Project structure
 
 | Path | Contents |
 | --- | --- |
-| `src/`, `CMakeLists.txt` | PlayCover custom plugin sources |
-| `tools/EndPlayDesktop/` | Controller, MaaTools capture, patch builder and installer |
-| `patches/` | Source patches for MXU and MaaEnd Go Agent, build reference versions |
-| `patch.py` | MaaEnd.app patch entry point |
-| `tests/` | Simulated plugin tests |
-| `docs/` | Plugin protocol and controller development notes |
+| `src/`, `CMakeLists.txt` | Game plugin sources and build configuration |
+| `tools/EndPlayDesktop/`, `patch.py` | Controller, capture, and patch tools |
+| `patches/` | Source patches for MXU and MaaEnd Go Agent |
+| `packaging/` | Packaging configuration for the one-click patch app |
+| `tests/`, `docs/` | Tests and detailed documentation |
 
-## Prerequisites
+## Installation
 
-Requires an Apple Silicon Mac, Xcode with the Mac Catalyst SDK, PlayCover, and MaaTools. Builds also require CMake, Ninja, Git, Go, Node.js 22, pnpm, Rust, `cargo tauri`, and uv.
+Install the community PlayCover fork above, Endfield, and MaaEnd first, then enable the MaaTool port in PlayCover.
+
+1. Go to this repository's **Releases** and download the patch `.dmg` and `libEndPlayDesktop.dylib`.
+2. Quit the game completely. In PlayCover, right-click Endfield, open **设置 → 杂项** (Settings → Miscellaneous), and add the downloaded `.dylib` as a custom plugin. Remove `libUnityDesktopMode.dylib` first if it is installed.
+3. **Turn off “启用键盘映射布局” (Enable Keymapping Layout)**, keep MaaTool enabled, and restart the game.
+4. Quit MaaEnd completely. Open `EndPlayDesktopPatch.app` from the `.dmg`, select your installed `MaaEnd.app`, and click “应用补丁” (Apply Patch).
+5. Reopen MaaEnd, choose the **EndPlayDesktop** controller, enter the game's MaaTools address, and connect.
+
+The patch preserves MaaEnd's existing features and marks Windows tasks as compatible except game launch and close. Compatibility labels do not mean every task has been tested. After updating MaaEnd, reapplying the patch is usually sufficient. Keep the game window neither minimized nor hidden; it can run in the background without taking over the keyboard or mouse.
+
+## Build from source
+
+Requires Xcode, CMake, Ninja, Git, Go, Node.js 22, pnpm, Rust, Tauri, and uv. Run these commands from the repository root:
 
 ```bash
-uv sync
-```
+uv sync --group bundle
 
-To add: verified macOS, PlayCover, MaaTools, and game versions, plus tool installation steps.
-
-## Build and load the game plugin
-
-```bash
+# Build the game plugin
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure
+
+# Build the MaaEnd patch; the first run downloads upstream sources and dependencies
+uv run python patch.py build --app /Applications/MaaEnd.app --mxu-source .cache/sources/MXU
+
+# Package the one-click app; replace v2.33.0 with the MaaEnd version printed above
+uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/v2.33.0
 ```
 
-In PlayCover's Endfield custom plugin settings, replace the old `libUnityDesktopMode.dylib` with `build/libEndPlayDesktop.dylib`, keep MaaTools enabled, and restart the game. See the [plugin documentation](./docs/plugin.en.md).
+The plugin is written to `build/libEndPlayDesktop.dylib`; the patch application is placed in `dist/`.
 
-To add: PlayCover settings screenshots, a PC UI example, and how to find the MaaTools port.
-
-## Patch MaaEnd.app
-
-Quit MaaEnd and keep the original installation package. The following uses `/Applications/MaaEnd.app`:
-
-```bash
-# Build a patch matching the installed version; the first build downloads official sources and dependencies
-uv run python patch.py build --app /Applications/MaaEnd.app
-
-# Preview affected files and controller availability
-uv run python patch.py plan --app /Applications/MaaEnd.app
-
-# Back up the original app, apply the patch, and sign it locally
-uv run python patch.py apply --app /Applications/MaaEnd.app
-```
-
-The patch retains the app name, icon, title, project address, and original controllers, adding an independent EndPlayDesktop address connection option. MaaEnd's version number, official update sources, and update logic stay unchanged. Tasks and options restricted to Windows controllers receive an additional compatibility entry, except game launch `LaunchGamePC` and game close `CloseGamePC`. Tasks without controller restrictions are already selectable. Compatibility entries do not establish successful testing of every task.
-
-Reopen the original MaaEnd.app, choose EndPlayDesktop, and enter the game's actual MaaTools address. Keep the game window shown and unminimized; other applications may cover it, and manual player input remains available.
-
-To add: controller settings screenshots, recommended game settings, and manual test results.
-
-## MaaEnd updates and rollback
-
-After a MaaEnd update overwrites the patch, repeat `build`, `plan`, and `apply`. Resource compatibility entries are generated from the new package, and Go Agent is built from the matching official source. Future MaaEnd versions are attempted by default, without a version or client-fingerprint compatibility allowlist; adjustments are made when actual patching problems appear. MXU `v2.8.0` is the current default build reference, not a MaaEnd compatibility ceiling.
-
-`apply` prints the backup directory. Quit MaaEnd, then use that path to restore the complete original app:
-
-```bash
-uv run python patch.py restore --app /Applications/MaaEnd.app --backup /absolute/path/to/backup
-```
-
-`backups/`, `.cache/`, and build outputs are not committed. The patch depends on this repository's Python environment; after moving the repository, reapply it to update runtime paths. MaaEnd user configuration stays under the original client's management.
-
-## Development and known limits
-
-```bash
-uv run python -m unittest discover -s tools/EndPlayDesktop -t . -p 'test_*.py'
-uv run python -m tools.EndPlayDesktop status
-```
-
-See the [controller development notes](./docs/controller.en.md). Game start/stop and text input are unimplemented. The Maa Pipeline Support extension does not yet support this controller and is not modified by this project. Capture with hidden/minimized windows or across Spaces is not guaranteed.
-
-To add: issue template, compatibility matrix, and release workflow.
-
-## Sources and license
-
-This repository uses [AGPL-3.0](./LICENSE) and retains attribution to MaaEnd and MXU; see [third-party notices](./THIRD_PARTY_NOTICES.md). Game files, the original third-party plugin, and its binaries are not included.
+This project is licensed under [AGPL-3.0](./LICENSE). See the [third-party notices](./THIRD_PARTY_NOTICES.md) for attribution.

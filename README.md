@@ -2,87 +2,50 @@
 
 [English](./README.en.md)
 
-为 PlayCover 中的《明日方舟：终末地》提供 PC 界面和进程内键鼠输入，并以本地补丁形式为 MaaEnd 添加 EndPlayDesktop 控制器。本项目独立维护，暂不向 MaaEnd 或 MXU 上游提交。
+以插件的形式为 PlayCover 中的《明日方舟：终末地》注入修改 PC 界面和进程内键鼠输入，并以补丁形式为 MaaEnd 添加 EndPlayDesktop 控制器，实现在 PlayCover 环境下使用 Windows 控制器的任务，丰富适配的任务类型。本项目独立于 MaaEnd 和 MXU 维护。需要使用带 MaaTool 的社区 fork 版 [PlayCover](https://github.com/hguandl/PlayCover/releases)。
 
-> 本 README 是初稿框架，安装截图、适配版本与发布说明待维护者补充。
+插件存在对游戏注入修改的行为，如在意相关风险请不要使用本项目，本项目不对使用后可能带来的账号损失负任何责任。
 
-## 项目组成
+## 项目结构
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/`、`CMakeLists.txt` | PlayCover 自定义插件源码 |
-| `tools/EndPlayDesktop/` | 控制器、MaaTools 截图、补丁构建和应用工具 |
-| `patches/` | MXU 与 MaaEnd Go Agent 的源码补丁、构建参考版本 |
-| `patch.py` | MaaEnd.app 补丁入口 |
-| `tests/` | 插件模拟测试 |
-| `docs/` | 插件协议与控制器开发说明 |
+| `src/`、`CMakeLists.txt` | 游戏插件源码与构建配置 |
+| `tools/EndPlayDesktop/`、`patch.py` | 控制器、截图与补丁工具 |
+| `patches/` | MXU 与 MaaEnd Go Agent 的源码补丁 |
+| `packaging/` | 一键补丁应用的打包配置 |
+| `tests/`、`docs/` | 测试与详细文档 |
 
-## 环境准备
+## 安装方法
 
-需要 Apple Silicon Mac、Xcode（含 Mac Catalyst SDK）、PlayCover 和 MaaTools。构建还需要 CMake、Ninja、Git、Go、Node.js 22、pnpm、Rust、`cargo tauri` 与 uv。
+需要先正常安装上述社区版 PlayCover、终末地和 MaaEnd，在 Playcover 中开放 MaaTool 的端口。
+
+1. 前往本仓库的 **Releases**，下载补丁 `.dmg` 和 `libEndPlayDesktop.dylib`。
+2. 完全退出游戏，在 PlayCover 中右键终末地，打开 **设置 → 杂项**，添加下载的 `.dylib` 为自定义插件；如已安装旧版 `libUnityDesktopMode.dylib`，先将其移除。
+3. **关闭“启用键盘映射布局”**，保持 MaaTool 启用，然后重新启动游戏。
+4. 完全退出 MaaEnd，打开 `.dmg` 中的 `EndPlayDesktopPatch.app`，选择已安装的 `MaaEnd.app`，点击“应用补丁”。
+5. 重新打开 MaaEnd，选择 **EndPlayDesktop** 控制器，填写游戏的 MaaTools 地址并连接。
+
+补丁保留 MaaEnd 原有功能，为除开启、关闭游戏以外的 Windows 任务添加兼容标记；兼容标记不代表所有任务均已实测。MaaEnd 更新后，一般情况重新应用补丁即可。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
+
+## 自行构建
+
+需要 Xcode、CMake、Ninja、Git、Go、Node.js 22、pnpm、Rust、tauri 和 uv 环境。在本仓库根目录运行：
 
 ```bash
-uv sync
-```
+uv sync --group bundle
 
-待补充：已验证的 macOS、PlayCover、MaaTools 和游戏版本，以及工具安装步骤。
-
-## 构建并加载游戏插件
-
-```bash
+# 构建游戏插件
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
-ctest --test-dir build --output-on-failure
+
+# 构建 MaaEnd 补丁，首次运行会下载上游源码和依赖
+uv run python patch.py build --app /Applications/MaaEnd.app --mxu-source .cache/sources/MXU
+
+# 打包一键应用；将 v2.33.0 替换为上一步输出的 MaaEnd 版本
+uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/v2.33.0
 ```
 
-在 PlayCover 的终末地自定义插件设置中，用 `build/libEndPlayDesktop.dylib` 替换旧 `libUnityDesktopMode.dylib`，保持 MaaTools 启用并重启游戏。具体说明见[插件文档](./docs/plugin.md)。
+插件产物为 `build/libEndPlayDesktop.dylib`；补丁程序位于 `dist/`。
 
-待补充：PlayCover 设置截图、PC 界面示例和 MaaTools 端口查看方法。
-
-## 为 MaaEnd.app 应用补丁
-
-完全退出 MaaEnd，保留原安装包。以下以 `/Applications/MaaEnd.app` 为例：
-
-```bash
-# 构建与当前包体版本匹配的补丁；首次需要下载官方源码和构建依赖
-uv run python patch.py build --app /Applications/MaaEnd.app
-
-# 查看将修改的文件与兼容范围
-uv run python patch.py plan --app /Applications/MaaEnd.app
-
-# 备份原包、应用补丁并重新进行本地签名
-uv run python patch.py apply --app /Applications/MaaEnd.app
-```
-
-补丁保留原应用名称、图标、标题、项目地址及原控制器，新增独立的 EndPlayDesktop 地址连接选项。MaaEnd 的版本号、官方更新源和更新逻辑保持不变。所有带 Windows 控制器限制的任务及选项追加兼容标记，开启游戏 `LaunchGamePC` 与关闭游戏 `CloseGamePC` 除外。未限制控制器的任务原本就可选。标记兼容不代表每项任务均已实测。
-
-重新打开原 MaaEnd.app，选择 EndPlayDesktop，填写游戏实际 MaaTools 地址。游戏窗口需保持显示且未最小化，可以被其他应用遮挡；玩家仍可手动介入。
-
-待补充：控制器设置截图、推荐游戏设置与人工测试结果。
-
-## MaaEnd 更新与回滚
-
-MaaEnd 更新覆盖补丁后，重新执行 `build`、`plan`、`apply`。资源兼容标记根据新包动态生成；Go Agent 按包体对应的官方源码构建。默认尝试兼容未来所有 MaaEnd 版本，不设置版本或客户端指纹兼容白名单；实际出现补丁应用问题后再调整。MXU `v2.8.0` 是当前默认构建参考，不作为 MaaEnd 兼容上限。
-
-`apply` 输出备份目录。退出 MaaEnd 后，可使用该路径恢复完整原包：
-
-```bash
-uv run python patch.py restore --app /Applications/MaaEnd.app --backup /absolute/path/to/backup
-```
-
-`backups/`、`.cache/` 和编译产物均不提交。补丁依赖本仓库的 Python 环境；移动仓库后需重新应用补丁以更新运行路径。MaaEnd 用户配置仍由原客户端管理。
-
-## 开发与已知边界
-
-```bash
-uv run python -m unittest discover -s tools/EndPlayDesktop -t . -p 'test_*.py'
-uv run python -m tools.EndPlayDesktop status
-```
-
-控制器说明见[开发文档](./docs/controller.md)。当前不实现游戏启停和文本输入；Maa Pipeline Support 扩展尚不支持此控制器，本项目不修改该扩展。隐藏、最小化和跨 Space 的截图不在保证范围内。
-
-待补充：问题反馈模板、兼容矩阵、版本发布流程。
-
-## 来源与许可
-
-仓库使用 [AGPL-3.0](./LICENSE)，保留 MaaEnd 与 MXU 的来源说明，见[第三方声明](./THIRD_PARTY_NOTICES.md)。游戏程序、原第三方插件及其二进制不包含在仓库中。
+本项目采用 [AGPL-3.0](./LICENSE)，来源说明见[第三方声明](./THIRD_PARTY_NOTICES.md)。
