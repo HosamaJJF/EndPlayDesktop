@@ -12,9 +12,9 @@
 
 ## 构建与应用
 
-操作流程见根目录 [README](../README.md)。构建时按包体版本检出 MaaEnd 官方标签，并核对原 Go Agent 内嵌的 Git 提交；MXU 固定在 `patches/versions.json` 的基线。补丁不能应用或原生驱动已有其他编辑时停止，不覆盖未知改动。
+操作流程见根目录 [README](../README.md)。构建时按包体版本检出 MaaEnd 官方标签；MXU 默认使用 `patches/versions.json` 记录的构建参考。未来版本默认尝试兼容，不以已知版本、原始二进制哈希或客户端指纹拦截。实际补丁不能应用时再处理；原生驱动已有其他编辑时不覆盖本地改动。
 
-构建产物位于 `.cache/payloads/<MaaEnd版本>/`，包含 MXU、对应版本 Go Agent 和哈希清单。应用前核对包体版本、原始二进制哈希和补丁产物哈希。维护者可通过 `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu` 复用从已核对源码构建的客户端；此选项由维护者保证二进制来源。
+构建产物位于 `.cache/payloads/<MaaEnd版本>/`，包含 MXU、对应版本 Go Agent 和哈希清单。应用前校验补丁产物完整性，不把目标包版本或原始二进制哈希作为兼容限制。维护者可通过 `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu` 复用已有客户端；此选项由维护者保证二进制来源。
 
 `apply` 在临时副本中修改并签名，成功后替换原包，完整原包备份至 `backups/apps/`。重复应用同一补丁不重复注册控制器。`restore` 恢复备份原包；它不修改 MXU 正常管理的用户配置目录。补丁收据位于 `Contents/Resources/EndPlayDesktop/receipt.json`，用于识别补丁和关联备份。
 

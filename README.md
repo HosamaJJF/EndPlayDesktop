@@ -12,7 +12,7 @@
 | --- | --- |
 | `src/`、`CMakeLists.txt` | PlayCover 自定义插件源码 |
 | `tools/EndPlayDesktop/` | 控制器、MaaTools 截图、补丁构建和应用工具 |
-| `patches/` | MXU 与 MaaEnd Go Agent 的源码补丁、版本基线 |
+| `patches/` | MXU 与 MaaEnd Go Agent 的源码补丁、构建参考版本 |
 | `patch.py` | MaaEnd.app 补丁入口 |
 | `tests/` | 插件模拟测试 |
 | `docs/` | 插件协议与控制器开发说明 |
@@ -62,7 +62,7 @@ uv run python patch.py apply --app /Applications/MaaEnd.app
 
 ## MaaEnd 更新与回滚
 
-MaaEnd 更新覆盖补丁后，重新执行 `build`、`plan`、`apply`。资源兼容标记根据新包动态生成；Go Agent 按包体对应的官方源码构建。MXU 补丁目前基于 `v2.8.0`；若更新同时更换了 MXU 客户端代码，工具会停止构建，需先迁移控制器补丁，避免以旧客户端覆盖新功能。版本或基线不匹配时停止应用。
+MaaEnd 更新覆盖补丁后，重新执行 `build`、`plan`、`apply`。资源兼容标记根据新包动态生成；Go Agent 按包体对应的官方源码构建。默认尝试兼容未来所有 MaaEnd 版本，不设置版本或客户端指纹兼容白名单；实际出现补丁应用问题后再调整。MXU `v2.8.0` 是当前默认构建参考，不作为 MaaEnd 兼容上限。
 
 `apply` 输出备份目录。退出 MaaEnd 后，可使用该路径恢复完整原包：
 

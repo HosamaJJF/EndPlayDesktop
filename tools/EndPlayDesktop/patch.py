@@ -59,8 +59,6 @@ def app_info(app: Path) -> tuple[dict, Path, str]:
     version = interface.get("version")
     if interface.get("name") != "MaaEnd" or not isinstance(version, str) or not version:
         raise ValueError("The target must be a versioned MaaEnd app")
-    if version != info.get("CFBundleShortVersionString"):
-        raise ValueError("Bundle and interface versions disagree")
     return info, directory, version
 
 
@@ -141,19 +139,10 @@ def resource_changes(directory: Path, runtime: Path) -> tuple[dict[Path, dict], 
 
 def load_payload(payload: Path, app: Path) -> tuple[dict, str]:
     manifest = read_json(payload / "manifest.json")
-    info, directory, version = app_info(app)
-    if manifest.get("format") != 1 or manifest.get("maaend_version") != version:
-        raise ValueError("Payload does not match this MaaEnd version; rebuild after updating MaaEnd")
+    if manifest.get("format") != 1:
+        raise ValueError("Unsupported patch payload format")
     if manifest.get("architecture") != "arm64":
         raise ValueError("Only the Apple Silicon payload is supported")
-    receipt_path = app / RECEIPT
-    receipt = read_json(receipt_path) if receipt_path.exists() else None
-    base = receipt["base"] if receipt else {
-        "mxu": digest(directory / info["CFBundleExecutable"]),
-        "go-service": digest(directory / "agent/go-service"),
-    }
-    if base != manifest["base"]:
-        raise ValueError("App executables differ from the payload baseline; build for this exact app")
     for name in ("mxu", "go-service"):
         if digest(contained(payload, manifest["files"][name]["path"])) != manifest["files"][name]["sha256"]:
             raise ValueError(f"Corrupt patch payload: {name}")
@@ -239,7 +228,7 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path) -> dict:
             destination.chmod(0o755)
         write_json(staged / RECEIPT, {
             "format": 1, "payload_id": payload_id, "maaend_version": version,
-            "base": manifest["base"], "backup": str(backup), "runtime": str(runtime),
+            "backup": str(backup), "runtime": str(runtime),
         })
         sign_app(staged, [target / relative for relative in changes])
         swap_app(app, staged)

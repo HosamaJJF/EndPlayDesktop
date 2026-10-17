@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import plistlib
-import struct
 import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
-from .build_patch import client_content_hash, prepare_mxu
+from .build_patch import prepare_mxu
 from .patch import (CONTROLLER, RECEIPT, app_info, apply_patch, digest, load_payload,
                     resource_changes, restore, write_json)
 
@@ -65,7 +64,6 @@ class AppPatchTests(unittest.TestCase):
             (self.payload / name).write_bytes(b"patched " + name.encode())
         self.manifest = {
             "format": 1, "maaend_version": "v2.33.0", "architecture": "arm64",
-            "base": {"mxu": digest(self.directory / "MaaEnd"), "go-service": digest(self.directory / "agent/go-service")},
             "files": {name: {"path": name, "sha256": digest(self.payload / name)} for name in ("mxu", "go-service")},
         }
         write_json(self.payload / "manifest.json", self.manifest)
@@ -123,22 +121,18 @@ class AppPatchTests(unittest.TestCase):
         self.assertEqual(self.snapshot(), original)
         self.assertEqual(len(list(self.backups.iterdir())), 1)
 
-    def test_rejects_wrong_version_changed_baseline_and_corrupt_payload_before_mutation(self) -> None:
+    def test_rejects_unknown_payload_format_and_corrupt_payload_before_mutation(self) -> None:
         original = self.snapshot()
-        self.manifest["maaend_version"] = "v999.0.0"
+        self.manifest["format"] = 999
         write_json(self.payload / "manifest.json", self.manifest)
-        with self.assertRaisesRegex(ValueError, "version"):
+        with self.assertRaisesRegex(ValueError, "format"):
             apply_patch(self.app, self.payload, self.runtime, self.backups)
-        self.manifest["maaend_version"] = "v2.33.0"
+        self.manifest["format"] = 1
         write_json(self.payload / "manifest.json", self.manifest)
         (self.payload / "mxu").write_bytes(b"corrupted")
         with self.assertRaisesRegex(ValueError, "Corrupt"):
             load_payload(self.payload, self.app)
         (self.payload / "mxu").write_bytes(b"patched mxu")
-        (self.directory / "MaaEnd").write_bytes(b"another upstream build")
-        with self.assertRaisesRegex(ValueError, "baseline"):
-            load_payload(self.payload, self.app)
-        (self.directory / "MaaEnd").write_bytes(original["Contents/MacOS/MaaEnd"])
         self.assertEqual(self.snapshot(), original)
         self.assertFalse(self.backups.exists())
 
@@ -158,24 +152,16 @@ class AppPatchTests(unittest.TestCase):
                 prepare_mxu(source, {"mxu": {"commit": "pinned"}})
         self.assertEqual(driver.read_bytes(), b"local edits")
 
-    def test_client_baseline_ignores_signatures_but_detects_code_changes(self) -> None:
-        binary = self.root / "client"
-        image = bytearray(320)
-        struct.pack_into("<8I", image, 0, 0xFEEDFACF, 0x0100000C, 0, 2, 1, 152, 0, 0)
-        struct.pack_into("<II", image, 32, 0x19, 152)
-        struct.pack_into("<I", image, 96, 1)
-        image[104:110] = b"__text"
-        image[120:126] = b"__TEXT"
-        struct.pack_into("<QI", image, 144, 16, 256)
-        image[256:272] = b"unchanged code!!"
-        binary.write_bytes(image)
-        baseline = client_content_hash(binary)
-        image[288:320] = b"s" * 32
-        binary.write_bytes(image)
-        self.assertEqual(client_content_hash(binary), baseline)
-        image[260] ^= 1
-        binary.write_bytes(image)
-        self.assertNotEqual(client_content_hash(binary), baseline)
+    def test_future_versions_and_changed_clients_are_not_blocked_by_a_baseline(self) -> None:
+        self.info["CFBundleShortVersionString"] = "v999.0.0"
+        (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps(self.info))
+        self.interface["version"] = "v999.0.0-rc.1"
+        write_json(self.directory / "interface.json", self.interface)
+        (self.directory / "MaaEnd").write_bytes(b"future upstream client")
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["version"], "v999.0.0-rc.1")
+        self.assertEqual(app_info(self.app)[0], self.info)
 
 
 if __name__ == "__main__":

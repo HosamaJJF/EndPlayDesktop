@@ -2,10 +2,7 @@
   "mxu": {
     "repository": "https://github.com/MistEO/MXU.git",
     "tag": "v2.8.0",
-    "commit": "5e923e83b30a102fb78da35c30ee2e1559aea682",
-    "packaged_content_hashes": [
-      "ecdae371a4ac634b6b465ee12d8abc2c54d2e3e63ccf780741c7b1348f177296"
-    ]
+    "commit": "5e923e83b30a102fb78da35c30ee2e1559aea682"
   },
   "maaend": {
     "repository": "https://github.com/MaaEnd/MaaEnd.git",

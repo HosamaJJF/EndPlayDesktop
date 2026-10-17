@@ -12,9 +12,9 @@ Pipeline nodes, game resources, business algorithms, original controller setting
 
 ## Building and applying
 
-See the root [README](../README.en.md) for commands. Builds check out the official MaaEnd tag matching the app and compare it with the Git revision embedded in the original Go Agent. MXU uses the baseline in `patches/versions.json`. Inapplicable patches or unrelated edits to the native driver stop the build rather than overwriting unknown changes.
+See the root [README](../README.en.md) for commands. Builds check out the official MaaEnd tag matching the app, while MXU defaults to the build reference in `patches/versions.json`. Future versions are attempted by default, without blocking on known-version lists, original executable hashes, or client fingerprints. Actual patch-application failures are handled when encountered; existing edits to the native driver are not overwritten.
 
-Outputs under `.cache/payloads/<MaaEnd version>/` contain MXU, the matching Go Agent, and a hash manifest. Installation verifies app version, original executable hashes, and payload hashes. Maintainers can reuse a client built from the checked source through `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu`; maintainers are responsible for the binary's provenance with this option.
+Outputs under `.cache/payloads/<MaaEnd version>/` contain MXU, the matching Go Agent, and a hash manifest. Installation verifies payload integrity, without using the target version or original executable hashes as compatibility restrictions. Maintainers can reuse an existing client through `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu`; maintainers are responsible for the binary's provenance with this option.
 
 `apply` modifies and signs a temporary copy before replacing the app, backing up the complete original under `backups/apps/`. Reapplying the same patch does not duplicate controller registration. `restore` restores the backup without changing the user configuration directory managed by normal MXU. A receipt at `Contents/Resources/EndPlayDesktop/receipt.json` identifies the patch and associated backup.
 

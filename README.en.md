@@ -12,7 +12,7 @@ Provides PC UI and in-process keyboard/mouse input for Arknights: Endfield in Pl
 | --- | --- |
 | `src/`, `CMakeLists.txt` | PlayCover custom plugin sources |
 | `tools/EndPlayDesktop/` | Controller, MaaTools capture, patch builder and installer |
-| `patches/` | Source patches for MXU and MaaEnd Go Agent, version baselines |
+| `patches/` | Source patches for MXU and MaaEnd Go Agent, build reference versions |
 | `patch.py` | MaaEnd.app patch entry point |
 | `tests/` | Simulated plugin tests |
 | `docs/` | Plugin protocol and controller development notes |
@@ -62,7 +62,7 @@ To add: controller settings screenshots, recommended game settings, and manual t
 
 ## MaaEnd updates and rollback
 
-After a MaaEnd update overwrites the patch, repeat `build`, `plan`, and `apply`. Resource compatibility entries are generated from the new package, and Go Agent is built from the matching official source. The MXU patch currently targets `v2.8.0`. If an update also changes MXU client code, the builder stops until the controller patch is rebased, avoiding replacement of new functionality with an older client. Version or baseline mismatches stop installation.
+After a MaaEnd update overwrites the patch, repeat `build`, `plan`, and `apply`. Resource compatibility entries are generated from the new package, and Go Agent is built from the matching official source. Future MaaEnd versions are attempted by default, without a version or client-fingerprint compatibility allowlist; adjustments are made when actual patching problems appear. MXU `v2.8.0` is the current default build reference, not a MaaEnd compatibility ceiling.
 
 `apply` prints the backup directory. Quit MaaEnd, then use that path to restore the complete original app:
 
