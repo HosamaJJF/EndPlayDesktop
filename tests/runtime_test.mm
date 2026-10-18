@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 using namespace endplaydesktop;
 extern "C" {
@@ -42,6 +43,12 @@ int main()
                 && [camera[@"yaw_degrees"] floatValue] == 42 && [camera[@"field_of_view"] floatValue] == 60,
                 "read-only camera diagnostics must wrap Unity Euler pitch and work without automation");
         Require(!runtime.automationActive(), "camera diagnostics must not start an input session");
+        Require([runtime.status()[@"scroll_units_per_tick"] floatValue] == 120
+                && [runtime.status()[@"legacy_scroll_mode"] isEqual:@"single_frame"],
+                "status must declare Windows scroll units and frame-based Legacy input");
+        Require([runtime.status()[@"world_trackpad_scroll_mode"] isEqual:@"distance_detents"]
+                && [runtime.status()[@"world_trackpad_points_per_tick"] floatValue] == 40,
+                "status must identify distance-based world trackpad detents and their sensitivity");
         Require(EPDTestPlatform() == 2, "game DeviceInfo must switch to WindowsPlayer");
         Require([runtime.command(@{ @"op": @"begin" })[@"ok"] boolValue], "begin must succeed");
         Require(EPDTestFocus() == 2 && EPDTestBackground(), "automation must allow background input");
@@ -59,7 +66,10 @@ int main()
         foreground = false;
         runtime.nativeKey('A', true);
         runtime.nativeButton(1, true);
+        runtime.nativeScroll(0, 1);
         Require(!EPDTestKeyDown(15) && ReadMouse().buttons == 0, "input to other applications must not enter the game");
+        Require([runtime.status()[@"native_scroll_events"] unsignedLongLongValue] == 0,
+                "physical scrolling while inactive must not enter the game");
         foreground = true;
         runtime.command(@{ @"op": @"move", @"x": @100, @"y": @200, @"delta": @NO });
         Require(ReadMouse().x == 100 && ReadMouse().y == 519, "top-left screenshot coordinates must flip Y");
@@ -70,6 +80,24 @@ int main()
         Require(ReadMouse().dx == 40 && ReadMouse().dy == 20, "manual relative input must retain its original sensitivity");
         runtime.nativePosition(250, 150);
         Require(ReadMouse().x == 250 && ReadMouse().y == 569 && runtime.automationActive(), "manual pointer motion must coexist with automation");
+        runtime.nativeScroll(1, -1);
+        Require(ReadMouse().scroll_x == 120 && ReadMouse().scroll_y == -120
+                && ReadMouse().x == 250 && ReadMouse().y == 569 && ReadMouse().dx == 0 && ReadMouse().dy == 0,
+                "a physical detent must use Windows wheel units without moving the pointer or camera");
+        runtime.nativeScroll(0.25f, -0.5f);
+        Require(ReadMouse().scroll_x == 30 && ReadMouse().scroll_y == -60,
+                "physical high-resolution scrolling must preserve fractional wheel units");
+        runtime.nativeScroll(0, 0);
+        runtime.nativeScroll(0, std::numeric_limits<float>::infinity());
+        Require([runtime.status()[@"native_scroll_events"] unsignedLongLongValue] == 2,
+                "empty or nonfinite native scroll input must be ignored");
+        Require([runtime.command(@{ @"op": @"scroll", @"dx": @60, @"dy": @-240 })[@"ok"] boolValue]
+                && ReadMouse().scroll_x == 60 && ReadMouse().scroll_y == -240,
+                "automation must retain its Windows wheel units without being multiplied twice");
+        runtime.nativeButton(0, true);
+        Require(ReadMouse().buttons == 1 && ReadMouse().scroll_x == 0 && ReadMouse().scroll_y == 0,
+                "unrelated mouse events must not replay previously queued scroll values");
+        runtime.nativeButton(0, false);
         runtime.nativeKey(0xa2, true);
         runtime.command(@{ @"op": @"key", @"vk": @0x11, @"down": @YES });
         runtime.nativeKey(0xa2, false);

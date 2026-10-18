@@ -10,7 +10,7 @@
 
 - 只在 `com.hypergryph.endfield` 中启动，通过已导出的 IL2CPP 接口按方法签名解析，不依赖旧插件或客户端固定地址。
 - 切换游戏 `Beyond.DeviceInfo` 的平台与输入类型，在 Unity Input System 创建虚拟 Keyboard、Mouse。
-- 提供 Windows VK、鼠标按钮、绝对位置、相对移动与滚轮；空闲和自动化期间均接收游戏前台的 GameController 键鼠、UIKit 点击、按键与悬停事件。
+- 提供 Windows VK、鼠标按钮、绝对位置、相对移动与滚轮；空闲和自动化期间均接收游戏前台的 GameController 键鼠、UIKit 点击、按键与悬停事件。物理滚轮优先使用本应用的 macOS 窗口事件，GameController 仅作回退。
 - 自动化会话临时开启后台更新与 IgnoreFocus，不加入手动接管或暂停切换。玩家与自动化分别记录持键，两者任一来源仍按住时保持按下；结束会话、断连或心跳超时只释放自动化来源并恢复设置，失焦只释放手动来源。
 - 同时向 Legacy Input 转发键盘与鼠标按钮，并提供鼠标位置、滚轮、`MouseAxis1/MouseAxis2`。通过当前镜像中的受限 ARM64 模式解析定位未导出的 `UnitySetKeyState` 和 icall 缓存，只替换数据指针；签名不匹配时停止初始化。文本输入与 Metal 截图尚未实现。
 - 保留游戏的 `Cursor.visible` 与锁定语义。世界场景中的手动相对位移来自本应用的鼠标事件；宿主光标只在游戏前台且请求锁定时捕获，失焦立即释放。后台自动化不捕获系统光标或激活窗口。
@@ -54,7 +54,7 @@ codesign --verify --strict build/libEndPlayDesktop.dylib
 | `move` | `x`, `y`, `delta` | 游戏原始截图坐标；`delta` 决定是否产生位置差值 |
 | `button` | `button`, `down` | 0 左键、1 右键、2 中键、3/4 辅助键 |
 | `relative` | `dx`, `dy` | 按渲染分辨率换算的 Windows 桌面位移，传入坐标 Y 向下 |
-| `scroll` | `dx`, `dy` | Unity Input System 滚轮增量，具体灵敏度待实测 |
+| `scroll` | `dx`, `dy` | Windows 滚轮增量，每格 120；Input System 使用原值，Legacy 按格数换算 |
 | `release` | 无 | 释放自动化来源已按下的键和按钮 |
 
 除查询外，输入命令必须位于 `begin` / `end` 会话内。请求 3 秒无进展时断开并安排主线程清理。游戏主线程不响应时，未执行的请求被取消；清理在主线程恢复后执行。响应中的 `input_update_count` 来自 Unity Input System，控制器等待它推进后返回，但更新计数不能单独证明事件被消费。`device_state` 从真实 Unity 控件回读鼠标坐标、左键和最近一个键的状态；`available=false` 表示客户端缺少相应回读接口。
@@ -62,6 +62,18 @@ codesign --verify --strict build/libEndPlayDesktop.dylib
 MaaEnd CLI 通过轮询异步任务状态响应 Ctrl-C，两个 Agent 不继承终端中断；取消任务并释放输入后才关闭 Agent。
 
 自动化鼠标位移从 0.1.6 起声明为 `relative_delta_mode=win32_scaled_single_frame`：Windows 位移按 MaaEnd `MapNavigator/navi_config.h` 的分辨率比例换算，Legacy 增量在同一帧内可重复读取，但不会延续到下一帧。未被读取的菜单增量会过期，绝对位置和按键更新不会覆盖待消费增量。玩家物理输入保留原有路径与灵敏度。当前客户端水平轴实测约为每单位 0.25°；垂直轴实测响应非线性，滑索的 `RelativeMove` 由 MaaEnd 控制器使用 0.1.7 的只读相机接口进行反馈调整，不在插件中改动玩家鼠标灵敏度；修改游戏镜头设置后仍应重新验证。
+
+### 滚轮单位与消费
+
+滚轮统一以 Windows 的每格 120 单位作为内部边界：物理输入按格数转成该单位，自动化的 `scroll` 命令直接传入该单位。Input System 每格接收 120，Legacy `mouseScrollDelta` 每格接收 1，`GetAxis` / `GetAxisRaw` 的 `MouseAxis3` 与 `Mouse ScrollWheel` 两个滚轮轴名称每格接收 0.1。
+
+物理输入优先读取本应用收到的 `NSEvent`，安装成功后不再转发 GameController 滚轮，避免重复。普通滚轮将 Cocoa 的非零小数增量向外取整为格数；高精度触控板保留连续小数，以 10 点换算一格，作为尚待实机调校的初始比例。横轴转换为 Windows 方向，纵轴沿用 macOS 事件的滚动方向。未能安装本地事件监听时，回退到 GameController，并把其回调值按格数处理。
+
+世界场景请求锁定光标时，高精度触控板的纵向输入按累计距离换算整数格：初始比例为每 40 点一格，余量留给后续事件；长滑可以在同一手势内连续发送多格，也可以反向调整，没有每次手势的步数上限。抬手或取消时清理不足一格的余量，纵向惯性被丢弃。该场景的原始高精度宿主事件会被消费，避免 UIKit 另行传入未经处理的滚动。没有手势 phase 的高精度设备以 200 毫秒空闲清理余量，失焦同样清理。菜单中的连续滚动及惯性、普通鼠标滚轮、自动化输入维持原有换算。`world_trackpad_scroll_mode=distance_detents` 和 `world_trackpad_points_per_tick=40` 标识此策略及比例，候选切换的实际灵敏度仍需实机验收。
+
+Legacy 滚轮按帧累加，同一帧各读取者获得一致的值，下一帧不重复播放；本帧已读取后到达的事件留到下一帧，过期未读的输入丢弃。位置、按钮等事件不会清掉待消费滚轮。玩家与自动化分别累计，失焦只清理玩家滚轮，结束会话只清理自动化滚轮。
+
+`status` 的 `scroll_units_per_tick=120`、`legacy_scroll_mode=single_frame` 标识此行为，`native_scroll_events` 统计已接收的非零物理滚轮事件。构建、八项 CTest 与签名校验已通过。2026-10-18，用户实测确认地图缩放、好友列表等场景改善，并在改用累计距离换算后确认世界交互候选切换效果良好；这一反馈不代表全部游戏场景或自动化任务均已验收。
 
 ## 验证顺序
 
@@ -98,4 +110,5 @@ MaaEnd CLI 通过轮询异步任务状态响应 Ctrl-C，两个 Agent 不继承�
 
 - [Unity Input System](https://github.com/Unity-Technologies/InputSystem)：事件头、MouseState、Key 枚举和后台行为。
 - [PlayTools MaaTools 分支](https://github.com/hguandl/PlayTools/tree/MaaTools)：自定义插件加载和截图协议。
+- [Apple scrollingDeltaY](https://developer.apple.com/documentation/appkit/nsevent/scrollingdeltay)：普通滚轮与高精度滚动的单位区别；[SDL Cocoa 鼠标实现](https://github.com/libsdl-org/SDL/blob/main/src/video/cocoa/SDL_cocoamouse.m)：普通滚轮取整和高精度滚动初始比例的参考。
 - PC 模式方法签名来自对用户提供客户端与插件的只读检查；本实现不链接或分发原插件。

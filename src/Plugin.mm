@@ -64,6 +64,7 @@ void AttachMouse(GCMouse* mouse)
         };
     }
     input.scroll.valueChangedHandler = ^(GCControllerDirectionPad*, float dx, float dy) {
+        if (host_pointer_events) return; // NSEvent 已处理滚轮；GameController 只作回退，避免重复。
         dispatch_async(dispatch_get_main_queue(), ^{ GetRuntime().nativeScroll(dx, dy); });
     };
 }

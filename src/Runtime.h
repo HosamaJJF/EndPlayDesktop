@@ -32,6 +32,7 @@ public:
     void nativeButton(int button, bool down);
     void nativePosition(float x, float y, bool delta = false);
     void nativeDelta(float dx, float dy);
+    // Physical wheel ticks; automation's scroll command uses Windows units (120/tick).
     void nativeScroll(float dx, float dy);
 
 private:

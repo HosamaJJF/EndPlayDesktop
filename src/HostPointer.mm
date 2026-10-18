@@ -1,5 +1,6 @@
 #include "HostPointer.h"
 #include "Runtime.h"
+#include "ScrollState.h"
 
 #include <dlfcn.h>
 
@@ -13,6 +14,7 @@ namespace
 {
 bool locked = false;
 id monitor;
+HostScrollState scroll_input;
 int (*associate)(bool) = nullptr;
 int (*hide)(uint32_t) = nullptr;
 int (*show)(uint32_t) = nullptr;
@@ -39,6 +41,10 @@ CGRect Frame(id object)
 {
     return reinterpret_cast<CGRect (*)(id, SEL)>(objc_msgSend)(object, sel_registerName("frame"));
 }
+double Scalar(id object, const char* name)
+{
+    return reinterpret_cast<double (*)(id, SEL)>(objc_msgSend)(object, sel_registerName(name));
+}
 } // namespace
 
 bool InstallHostPointerInput(Runtime& runtime)
@@ -48,11 +54,32 @@ bool InstallHostPointerInput(Runtime& runtime)
     SEL add = sel_registerName("addLocalMonitorForEventsMatchingMask:handler:");
     if (!event || ![event respondsToSelector:add]) return false;
     if (monitor) return true;
-    constexpr uint64_t mask = (1ull << 5) | (1ull << 6) | (1ull << 7) | (1ull << 27);
+    constexpr NSInteger scroll_wheel = 22;
+    constexpr uint64_t mask = (1ull << 5) | (1ull << 6) | (1ull << 7) | (1ull << scroll_wheel) | (1ull << 27);
     monitor = reinterpret_cast<id (*)(id, SEL, uint64_t, id (^)(id))>(objc_msgSend)(event, add, mask, ^id(id input) {
-        if (runtime.wantsPointerLock() && ActiveWindow()) {
-            const double dx = reinterpret_cast<double (*)(id, SEL)>(objc_msgSend)(input, sel_registerName("deltaX"));
-            const double dy = reinterpret_cast<double (*)(id, SEL)>(objc_msgSend)(input, sel_registerName("deltaY"));
+        const NSInteger type = reinterpret_cast<NSInteger (*)(id, SEL)>(objc_msgSend)(input, sel_registerName("type"));
+        if (type == scroll_wheel) {
+            // Window events include trackpads and repeated wheel detents. They
+            // must not be reused as relative motion while the pointer is locked.
+            if (ActiveWindow()) {
+                const bool precise = Flag(input, "hasPreciseScrollingDeltas");
+                HostScrollEvent event {
+                    .dx = static_cast<float>(Scalar(input, precise ? "scrollingDeltaX" : "deltaX")),
+                    .dy = static_cast<float>(Scalar(input, precise ? "scrollingDeltaY" : "deltaY")),
+                    .precise = precise, .world = runtime.wantsPointerLock()
+                };
+                if (event.precise && event.world) {
+                    event.phase = reinterpret_cast<uint64_t (*)(id, SEL)>(objc_msgSend)(input, sel_registerName("phase"));
+                    event.momentum = reinterpret_cast<uint64_t (*)(id, SEL)>(objc_msgSend)(input, sel_registerName("momentumPhase"));
+                    event.time = Scalar(input, "timestamp");
+                }
+                const auto result = scroll_input.update(event);
+                runtime.nativeScroll(result.dx, result.dy);
+                if (result.consume) return nil;
+            } else scroll_input.reset();
+        } else if (runtime.wantsPointerLock() && ActiveWindow()) {
+            const double dx = Scalar(input, "deltaX");
+            const double dy = Scalar(input, "deltaY");
             if (dx || dy) runtime.nativeDelta(static_cast<float>(dx), static_cast<float>(-dy));
         }
         return input;
@@ -68,6 +95,7 @@ bool InstallHostPointerInput(Runtime& runtime)
     }
     for (NSString* name in @[ @"NSApplicationDidResignActiveNotification", @"NSWindowDidResignKeyNotification" ]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification* note) {
+            scroll_input.reset();
             ReleaseHostPointerLock();
         }];
     }

@@ -3,6 +3,7 @@
 #include "InputState.h"
 #include "FrameDelta.h"
 #include "NativeCode.h"
+#include "ScrollState.h"
 
 #include <algorithm>
 #include <array>
@@ -202,7 +203,7 @@ public:
         install(cursor, "get_lockState", "UnityEngine.Cursor::get_lockState()", reinterpret_cast<void*>(GetLockState));
         ready_ = true;
     }
-    void update(const MouseState& state, bool automated)
+    void update(const MouseState& state, bool automated, bool physical_scroll = false)
     {
         state_.x = state.x; state_.y = state.y;
         if (!ready_) return;
@@ -210,9 +211,14 @@ public:
             if (automated) automated_delta_.add(state.dx, state.dy, frame());
             else { state_.dx = state.dx; state_.dy = state.dy; delta_deadline_ = CACurrentMediaTime() + 0.05; }
         }
-        if (state.scroll_x || state.scroll_y) { state_.scroll_x = state.scroll_x; state_.scroll_y = state.scroll_y; scroll_deadline_ = CACurrentMediaTime() + 0.05; }
+        if (state.scroll_x || state.scroll_y) scroll_.add(state.scroll_x, state.scroll_y, frame(), physical_scroll);
     }
-    void resetDelta() { state_.dx = state_.dy = state_.scroll_x = state_.scroll_y = 0; automated_delta_.reset(); }
+    void resetDelta(bool physical)
+    {
+        state_.dx = state_.dy = 0;
+        automated_delta_.reset();
+        scroll_.reset(physical);
+    }
     bool ready() const { return ready_; }
     uint64_t reads() const { return reads_.load(); }
     bool wantsPointerLock() const { return !visible_; }
@@ -226,8 +232,9 @@ private:
     std::vector<Hook> hooks_;
     MouseState state_;
     FrameDelta automated_delta_;
+    ScrollState scroll_;
     const void* frame_count_ = nullptr;
-    double delta_deadline_ = 0, scroll_deadline_ = 0;
+    double delta_deadline_ = 0;
     bool ready_ = false, visible_ = true;
     Axis axis_ = nullptr, raw_axis_ = nullptr;
     std::atomic<uint64_t> reads_ { 0 };
@@ -251,6 +258,9 @@ private:
         if (string && (s.named(string, "MouseAxis2") || s.named(string, "Mouse Y"))) {
             return s.automated_delta_.read(s.frame()).second + (CACurrentMediaTime() <= s.delta_deadline_ ? s.state_.dy : 0);
         }
+        if (string && (s.named(string, "MouseAxis3") || s.named(string, "Mouse ScrollWheel"))) {
+            return s.scroll_.axis(s.frame());
+        }
         const Axis original = raw ? s.raw_axis_ : s.axis_;
         return original ? original(string) : 0;
     }
@@ -260,8 +270,10 @@ private:
     static void MousePosition(Vector3* point) { ++instance_->reads_; *point = { instance_->state_.x, instance_->state_.y, 0 }; }
     static void MouseScroll(Vector2* point)
     {
-        ++instance_->reads_;
-        *point = CACurrentMediaTime() <= instance_->scroll_deadline_ ? Vector2 { instance_->state_.scroll_x, instance_->state_.scroll_y } : Vector2 {};
+        auto& s = *instance_;
+        ++s.reads_;
+        const auto [x, y] = s.scroll_.read(s.frame());
+        *point = { x, y };
     }
     static void SetVisible(bool visible) { instance_->visible_ = visible; }
     static bool GetVisible() { return instance_->visible_; }
@@ -335,7 +347,7 @@ struct Runtime::Impl
     MouseState mouse;
     std::array<bool, 256> held {}, native_held {};
     uint16_t automated_buttons = 0, native_buttons = 0;
-    uint64_t native_key_events = 0, native_button_events = 0, native_delta_events = 0;
+    uint64_t native_key_events = 0, native_button_events = 0, native_delta_events = 0, native_scroll_events = 0;
     std::function<bool()> native_focus;
     int last_key = -1;
     std::unique_ptr<LegacyBridge> legacy;
@@ -501,10 +513,10 @@ struct Runtime::Impl
                       @"last_key_vk": @(last_key), @"last_key_pressed": key_pressed };
         } catch (const std::exception& e) { return @{ @"available": @NO, @"error": [NSString stringWithUTF8String:e.what()] ?: @"readback failed" }; }
     }
-    void queueMouse(bool automated = false)
+    void queueMouse(bool automated = false, bool physical_scroll = false)
     {
         if (automated) NormalizeDesktopDelta(mouse, width, height);
-        if (legacy) legacy->update(mouse, automated);
+        if (legacy) legacy->update(mouse, automated, physical_scroll);
         std::vector<uint8_t> data(mouse_size);
         std::memcpy(data.data(), &mouse, sizeof(mouse));
         queue(mouse_id, FourCC('M', 'O', 'U', 'S'), data.data(), data.size());
@@ -574,7 +586,7 @@ struct Runtime::Impl
         for (size_t vk = 0; vk < source.size(); ++vk) if (source[vk]) key(static_cast<int>(vk), false, physical);
         for (int i = 0; i < 5; ++i) if ((physical ? native_buttons : automated_buttons) & (1 << i)) button(i, false, physical);
         mouse.dx = mouse.dy = mouse.scroll_x = mouse.scroll_y = 0;
-        if (legacy) legacy->resetDelta();
+        if (legacy) legacy->resetDelta(physical);
         queueKeyboard();
         queueMouse();
     }
@@ -662,6 +674,9 @@ NSDictionary* Runtime::status() const
     }
     return @{ @"ok": @YES, @"protocol": @1, @"plugin": @"EndPlayDesktop", @"version": @"0.0.1",
               @"relative_delta_mode": @"win32_scaled_single_frame",
+              @"scroll_units_per_tick": @(kScrollUnitsPerTick), @"legacy_scroll_mode": @"single_frame",
+              @"world_trackpad_scroll_mode": @"distance_detents",
+              @"world_trackpad_points_per_tick": @(kWorldTrackpadPointsPerTick),
               @"ready": @(ready()), @"automation": @(s.active), @"width": @(s.width), @"height": @(s.height),
               @"ticks": @(s.ticks), @"input_update_count": @(updates), @"keycode": @"win32_vk",
               @"legacy_keyboard": @(s.api.legacy_key != nullptr), @"legacy_mouse_axes": @(s.legacy && s.legacy->ready()),
@@ -670,6 +685,7 @@ NSDictionary* Runtime::status() const
               @"focused": focused, @"input_type": input_type, @"run_in_background": background, @"background_behavior": behavior,
               @"native_app_active": NativeApplicationActive(),
               @"native_key_events": @(s.native_key_events), @"native_button_events": @(s.native_button_events),
+              @"native_scroll_events": @(s.native_scroll_events),
               @"device_state": ready() ? s.readback() : @{ @"available": @NO },
               @"error": [NSString stringWithUTF8String:s.error.c_str()] ?: @"" };
 }
@@ -774,7 +790,13 @@ void Runtime::nativeDelta(float dx, float dy)
 void Runtime::nativeScroll(float dx, float dy)
 {
     if (!ready() || !impl_->native_focus()) return;
-    try { impl_->mouse.scroll_x = dx; impl_->mouse.scroll_y = dy; impl_->queueMouse(); }
+    if (!std::isfinite(dx) || !std::isfinite(dy) || (!dx && !dy)) return;
+    try {
+        impl_->mouse.scroll_x = dx * kScrollUnitsPerTick;
+        impl_->mouse.scroll_y = dy * kScrollUnitsPerTick;
+        impl_->queueMouse(false, true);
+        ++impl_->native_scroll_events;
+    }
     catch (const std::exception& e) { os_log_error(OS_LOG_DEFAULT, "[EndPlayDesktop] native scroll failed: %{public}s", e.what()); }
 }
 
