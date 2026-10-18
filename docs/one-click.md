@@ -2,7 +2,7 @@
 
 [English](./one-click.en.md)
 
-下载并解压 `EndPlayDesktop-0.0.1-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
+下载并解压 `EndPlayDesktop-0.0.2-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
 
 ## 应用补丁
 

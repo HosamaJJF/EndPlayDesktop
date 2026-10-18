@@ -2,7 +2,7 @@
 
 [中文](./one-click.md)
 
-Download and extract `EndPlayDesktop-0.0.1-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
+Download and extract `EndPlayDesktop-0.0.2-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
 
 ## Apply the patch
 

@@ -672,7 +672,7 @@ NSDictionary* Runtime::status() const
         }
         catch (const std::exception& e) { return Error(e.what()); }
     }
-    return @{ @"ok": @YES, @"protocol": @1, @"plugin": @"EndPlayDesktop", @"version": @"0.0.1",
+    return @{ @"ok": @YES, @"protocol": @1, @"plugin": @"EndPlayDesktop", @"version": @"0.0.2",
               @"relative_delta_mode": @"win32_scaled_single_frame",
               @"scroll_units_per_tick": @(kScrollUnitsPerTick), @"legacy_scroll_mode": @"single_frame",
               @"world_trackpad_scroll_mode": @"distance_detents",
