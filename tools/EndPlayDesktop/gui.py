@@ -143,11 +143,10 @@ def main() -> int:
             target = self.target.resolve()
 
             def operation():
-                _, _, version = app_info(target)
                 if running(target):
                     raise ValueError("Quit MaaEnd before applying the patch")
                 runtime = distribution.install_runtime()
-                payload = distribution.install_payload(version)
+                payload = distribution.install_payload()
                 return apply_patch(target, payload, runtime.project, SUPPORT / "backups", runtime.python)
 
             self.start_job(operation, "正在准备运行环境、备份并应用补丁，请稍候…")

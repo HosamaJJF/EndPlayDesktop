@@ -2,7 +2,7 @@
 
 [中文](./one-click.md)
 
-Download and extract `EndPlayDesktop-0.0.2-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
+Download and extract `EndPlayDesktop-0.0.3-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
 
 ## Apply the patch
 
@@ -12,7 +12,9 @@ Download and extract `EndPlayDesktop-0.0.2-macos-arm64.zip`, or open the matchin
 4. Click “应用补丁” (Apply Patch) and wait for completion.
 5. Open the original MaaEnd, select EndPlayDesktop, enter the game's actual MaaTools address, and connect.
 
-The app name, MaaEnd version, official update sources, and existing task logic remain unchanged. Windows tasks receive additional compatibility entries, excluding game launch and close. Future MaaEnd versions are attempted by default without version or client-baseline compatibility checks.
+The app name, MaaEnd version, official update sources, and existing task logic remain unchanged. Windows tasks receive additional compatibility entries, excluding game launch and close. The tool preserves the target app's Go/C++ Agents, MaaFramework, and business resources. Reapply the same tool after ordinary MaaEnd updates; no per-release Agent rebuild is needed. Major protocol or framework ABI changes may still require an updated patch.
+
+Tools through 0.0.2 replaced Go Agent. Migration restores it from a matching unpatched backup. If that backup is missing, reinstall the current official MaaEnd app once, then apply this tool. Keep the task configuration.
 
 ## Game plugin
 
@@ -33,4 +35,4 @@ uv sync --group bundle
 uv run --group bundle python -m tools.EndPlayDesktop.build_app
 ```
 
-Generate `.cache/payloads/v2.33.0/` and `build/libEndPlayDesktop.dylib` before building. Outputs under `dist/` include the double-clickable app, ZIP, and DMG. The current test package is ad-hoc signed locally and is not Apple-notarized.
+Generate `.cache/payloads/desktop/` and `build/libEndPlayDesktop.dylib` before building. Outputs under `dist/` include the double-clickable app, ZIP, and DMG. The current test package is ad-hoc signed locally and is not Apple-notarized.

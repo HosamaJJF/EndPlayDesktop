@@ -8,21 +8,27 @@
 
 ## 责任边界
 
-`tools/EndPlayDesktop/patch.py` 动态修改原包接口和导入任务文件中的控制器限制；`patches/mxu.patch` 与 `patches/mxu/controller.rs` 提供独立控制器类型、地址表单、配置持久化和创建分支；`patches/maaend-agent.patch` 仅增加 Go Agent 对 EndPlayDesktop 桌面类型的识别及显示。
+`tools/EndPlayDesktop/patch.py` 动态修改原包接口和导入任务文件中的控制器限制；`patches/mxu.patch` 与 `patches/mxu/controller.rs` 提供独立控制器类型、地址表单、配置持久化和创建分支；Agent 通过现有的 `MacOS` 桌面类型识别控制器，无需修改或重新编译。
 
 不改写 Pipeline 节点、游戏资源、业务算法、原控制器设置、MaaEnd 版本字段或更新源。MXU 的更新服务源码不在补丁内。MaaEnd 仍检查自己的官方更新；更新覆盖本地支持后需要重新应用补丁。
 
 ## 构建与应用
 
-普通用户可使用内置运行环境的[一键补丁工具](./one-click.md)。命令行操作流程见根目录 [README](../README.md)。构建时按包体版本检出 MaaEnd 官方标签；MXU 默认使用 `patches/versions.json` 记录的构建参考。未来版本默认尝试兼容，不以已知版本、原始二进制哈希或客户端指纹拦截。实际补丁不能应用时再处理；原生驱动已有其他编辑时不覆盖本地改动。
+普通用户可使用内置运行环境的[一键补丁工具](./one-click.md)。命令行操作流程见根目录 [README](../README.md)。构建仅生成 MXU 控制器客户端，不检出 MaaEnd 或编译 Agent；MXU 默认使用 `patches/versions.json` 记录的构建参考。未来版本默认尝试兼容，不以已知版本、原始二进制哈希或客户端指纹拦截。实际补丁不能应用时再处理；原生驱动已有其他编辑时不覆盖本地改动。
 
-构建产物位于 `.cache/payloads/<MaaEnd版本>/`，包含 MXU、对应版本 Go Agent 和哈希清单。应用前校验补丁产物完整性，不把目标包版本或原始二进制哈希作为兼容限制。维护者可通过 `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu` 复用已有客户端；此选项由维护者保证二进制来源。
+构建产物位于 `.cache/payloads/desktop/`，只包含 MXU 和哈希清单，可供不同 MaaEnd 版本复用。Go/C++ Agent、MaaFramework 库、Pipeline 与业务数据始终取自目标应用。应用前校验补丁产物完整性，不把目标包版本或原始二进制哈希作为兼容限制。维护者可通过 `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu` 复用已有客户端；此选项由维护者保证二进制来源。
 
 `apply` 在临时副本中修改并签名，成功后替换原包，完整原包备份至 `backups/apps/`。重复应用同一补丁不重复注册控制器。`restore` 恢复备份原包；它不修改 MXU 正常管理的用户配置目录。补丁收据位于 `Contents/Resources/EndPlayDesktop/receipt.json`，用于识别补丁和关联备份。
 
+## 上游更新与旧版迁移
+
+同一补丁工具可重新应用到后续 MaaEnd 版本，动态读取新版任务与选项中的控制器限制，保留新 Agent 和资源，不按 MaaEnd 版本回退执行程序。普通任务、算法与数据更新无需发布新补丁。上游若改变 ProjectInterface、Agent 协议、控制器接口或 MaaFramework ABI，仍需重新评估 MXU 控制器客户端的兼容性。
+
+0.0.2 及更早工具会覆盖 Go Agent。新工具检测到旧收据时，只从同版本且未经补丁修改的原包备份恢复官方 Agent；支持沿多次补丁的备份链查找。缺少备份或版本不符时，在改动应用前停止，并提示重新安装当前版本的官方 MaaEnd 后再应用。不得继续保留已降级的 Agent，也不得从其他版本的备份中恢复。
+
 ## 控制器与任务范围
 
-EndPlayDesktop 使用 Windows VK 和 PC 基础资源，不加载 `resource_adb`、`resource_playcover` 或 `MacOSKeyMap.json`。`PI_CONTROLLER.type` 保持 `EndPlayDesktop`；Go Agent 将其归一化为桌面类型，C++ 导航沿用桌面输入后端。
+EndPlayDesktop 使用 Windows VK 和 PC 基础资源，不加载 `resource_adb`、`resource_playcover` 或 `MacOSKeyMap.json`。界面和持久化配置中的控制器类型保持 `EndPlayDesktop`；只在传给 Agent 的 `PI_CONTROLLER.type` 中映射成上游已支持的 `MacOS`，名称保持 `EndPlayDesktop`，C++ 导航沿用桌面输入后端。此映射不会加载 macOS 键码或资源覆盖层，也不会触发 Win32 注册表读取。CLI 使用相同约定。
 
 补丁根据 `type=Win32` 查出实际控制器名称，在相关任务及选项的限制列表中追加 EndPlayDesktop；不依赖完整的静态任务清单。`LaunchGamePC` 与 `CloseGamePC` 及其选项始终排除，其他已有控制器限制和选项默认值保留。兼容标记不代表所有任务均已适配或测试。
 

@@ -1,9 +1,8 @@
-"""Build version-matched patch executables from the checked upstream sources."""
+"""Build the reusable MXU controller patch; use the target app's own Agents."""
 from __future__ import annotations
 
 import os
 import platform
-import re
 import shutil
 import subprocess
 import tempfile
@@ -54,19 +53,6 @@ def build_mxu(source: Path, target: Path) -> Path:
     return target / "release/mxu"
 
 
-def prepare_agent(version: str, versions: dict) -> Path:
-    if not re.fullmatch(r"v[0-9][A-Za-z0-9.\-+]*", version):
-        raise ValueError("Unsupported release tag")
-    source = ROOT / ".cache/sources/MaaEnd" / version
-    if not source.exists():
-        source.parent.mkdir(parents=True, exist_ok=True)
-        run("git", "clone", "--depth", "1", "--filter=blob:none", "--sparse", "--branch", version,
-            versions["maaend"]["repository"], str(source), cwd=ROOT)
-        run("git", "sparse-checkout", "set", "agent/go-service", cwd=source)
-    apply_source_patch(source, ROOT / "patches/maaend-agent.patch")
-    return source
-
-
 def build_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
                   target_dir: Path | None = None) -> dict:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
@@ -74,36 +60,28 @@ def build_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
     versions = read_json(ROOT / "patches/versions.json")
     _, _, version = app_info(app)
     prepare_mxu(mxu_source, versions)
-    agent_source = prepare_agent(version, versions)
     binary = mxu_binary.resolve(strict=True) if mxu_binary else build_mxu(
         mxu_source, (target_dir or mxu_source / "target").resolve())
     cache = ROOT / ".cache/payloads"
     cache.mkdir(parents=True, exist_ok=True)
-    destination = cache / version
+    destination = cache / "desktop"
     # Never damage an existing payload if building or validation fails.
     with tempfile.TemporaryDirectory(prefix=".build-", dir=cache) as temporary:
-        payload = Path(temporary) / version
+        payload = Path(temporary) / "desktop"
         payload.mkdir()
         shutil.copy2(binary, payload / "mxu")
-        env = {**os.environ, "GOOS": "darwin", "GOARCH": "arm64", "CGO_ENABLED": "0"}
-        env.setdefault("GOCACHE", str(ROOT / ".cache/go-build"))
-        env.setdefault("GOMODCACHE", str(ROOT / ".cache/go-mod"))
-        run("go", "test", "-mod=readonly", "./pkg/pienv", cwd=agent_source / "agent/go-service", env=env)
-        run("go", "build", "-mod=readonly", "-trimpath", f"-ldflags=-X main.Version={version}",
-            "-o", str(payload / "go-service"), ".", cwd=agent_source / "agent/go-service", env=env)
-        for name in ("mxu", "go-service"):
-            run("codesign", "--force", "--sign", "-", str(payload / name), cwd=ROOT)
-            arch = subprocess.check_output(["lipo", "-archs", str(payload / name)], text=True).strip()
-            if arch != "arm64":
-                raise ValueError(f"Unexpected executable architecture: {name} ({arch})")
+        run("codesign", "--force", "--sign", "-", str(payload / "mxu"), cwd=ROOT)
+        arch = subprocess.check_output(["lipo", "-archs", str(payload / "mxu")], text=True).strip()
+        if arch != "arm64":
+            raise ValueError(f"Unexpected executable architecture: mxu ({arch})")
         write_json(payload / "manifest.json", {
-            "format": 1, "maaend_version": version, "maaend_commit": commit(agent_source),
+            "format": 2, "tested_maaend_version": version,
             "mxu_commit": commit(mxu_source), "architecture": "arm64",
-            "files": {name: {"path": name, "sha256": digest(payload / name)} for name in ("mxu", "go-service")},
+            "files": {"mxu": {"path": "mxu", "sha256": digest(payload / "mxu")}},
         })
         if destination.exists():
             # A payload is a reproducible build artifact, never app/user data.
             shutil.rmtree(destination)
         payload.rename(destination)
-    return {"status": "built", "payload": str(destination), "maaend_version": version,
-            "maaend_commit": commit(agent_source), "mxu_commit": commit(mxu_source)}
+    return {"status": "built", "payload": str(destination), "tested_maaend_version": version,
+            "mxu_commit": commit(mxu_source)}

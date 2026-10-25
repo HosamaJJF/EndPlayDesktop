@@ -2,7 +2,7 @@
 
 [English](./one-click.en.md)
 
-下载并解压 `EndPlayDesktop-0.0.2-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
+下载并解压 `EndPlayDesktop-0.0.3-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
 
 ## 应用补丁
 
@@ -12,7 +12,9 @@
 4. 点击“应用补丁”，等待完成提示。
 5. 打开原 MaaEnd，选择 EndPlayDesktop 控制器，填写游戏实际 MaaTools 地址并连接。
 
-应用名称、MaaEnd 版本号、官方更新源和原任务逻辑保持原样。Windows 任务追加兼容标记，开启和关闭游戏任务除外。未来 MaaEnd 版本默认继续应用，不做版本或客户端基线兼容拦截。
+应用名称、MaaEnd 版本号、官方更新源和原任务逻辑保持原样。Windows 任务追加兼容标记，开启和关闭游戏任务除外。目标包自己的 Go/C++ Agent、MaaFramework 与业务资源会保留。MaaEnd 常规更新后使用同一工具重新应用即可，无需按版本重编 Agent；上游协议或框架 ABI 大改时仍可能需要更新补丁。
+
+0.0.2 及更早工具替换过 Go Agent。迁移时会从同版本原包备份恢复；备份已删除时，需先重新安装一次当前官方 MaaEnd，再应用本工具。任务配置无需删除。
 
 ## 游戏插件
 
@@ -33,4 +35,4 @@ uv sync --group bundle
 uv run --group bundle python -m tools.EndPlayDesktop.build_app
 ```
 
-构建前需已生成 `.cache/payloads/v2.33.0/` 和 `build/libEndPlayDesktop.dylib`。产物位于 `dist/`，包含可双击的应用、ZIP 和 DMG。当前测试包使用本地 ad-hoc 签名，未进行 Apple 公证。
+构建前需已生成 `.cache/payloads/desktop/` 和 `build/libEndPlayDesktop.dylib`。产物位于 `dist/`，包含可双击的应用、ZIP 和 DMG。当前测试包使用本地 ad-hoc 签名，未进行 Apple 公证。

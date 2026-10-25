@@ -66,12 +66,11 @@ def smoke_runtime(app: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--payload", type=Path, default=ROOT / ".cache/payloads/v2.33.0")
+    parser.add_argument("--payload", type=Path, default=ROOT / ".cache/payloads/desktop")
     args = parser.parse_args(argv)
     payload = args.payload.resolve(strict=True)
-    manifest, _ = load_payload(payload, Path("/Applications/MaaEnd.app"))
+    load_payload(payload)
     version = re.search(r'^version\s*=\s*"([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.MULTILINE).group(1)
-    target_version = manifest["maaend_version"]
     assets = ROOT / ".cache/app-assets"
     if assets.exists():
         shutil.rmtree(assets)
@@ -82,13 +81,12 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("__init__.py", "__main__.py", "cli.py", "client.py", "capture.py", "controller.py", "pitch.py", "sidecar.py"):
         shutil.copy2(ROOT / "tools/EndPlayDesktop" / name, runtime / name)
     with zipfile.ZipFile(assets / "payloads.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in ("mxu", "go-service", "manifest.json"):
-            archive.write(payload / name, target_version + "/" + name)
+        for name in ("mxu", "manifest.json"):
+            archive.write(payload / name, "desktop/" + name)
     archive_source(assets / "EndPlayDesktop-source.zip")
     build_id = hashlib.sha256((digest(assets / "EndPlayDesktop-source.zip") + digest(assets / "payloads.zip")).encode()).hexdigest()[:12]
     write_json(assets / "distribution.json", {
-        "format": 1, "version": version, "build_id": build_id,
-        "payloads": [target_version], "default_payload": target_version,
+        "format": 2, "version": version, "build_id": build_id, "payload": "desktop",
     })
     run(sys.executable, "-m", "PyInstaller", "--noconfirm", "--distpath", str(ROOT / ".cache/app-dist"),
         "--workpath", str(ROOT / ".cache/app-build"), str(ROOT / "packaging/EndPlayDesktopPatch.spec"))

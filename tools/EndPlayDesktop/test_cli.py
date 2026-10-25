@@ -42,7 +42,8 @@ class RunnerTests(unittest.TestCase):
         for client, process, call in zip(self.clients, self.processes, self.popen.call_args_list):
             self.assertEqual(call.args[0][1], client.identifier)
             self.assertEqual(call.kwargs["cwd"], self.install)
-            self.assertEqual(json.loads(call.kwargs["env"]["PI_CONTROLLER"])["type"], "EndPlayDesktop")
+            self.assertEqual(json.loads(call.kwargs["env"]["PI_CONTROLLER"]),
+                             {"name": "EndPlayDesktop", "type": "MacOS"})
             self.assertTrue(call.kwargs["start_new_session"])
             client.register_sink.assert_called_once_with(self.resource, self.controller, self.tasker)
             client.disconnect.assert_called_once()

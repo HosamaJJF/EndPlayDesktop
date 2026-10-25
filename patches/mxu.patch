@@ -906,6 +906,22 @@ index 27af5f1..bd17fb6 100644
    Gamepad: true,
  };
  
+diff --git a/src/utils/piEnv.ts b/src/utils/piEnv.ts
+index 7fb7ad3..dd3cbde 100644
+--- a/src/utils/piEnv.ts
++++ b/src/utils/piEnv.ts
+@@ -79,6 +79,11 @@ export function buildPiEnvVars(context: PiEnvContext): Record<string, string> {
+       controller as unknown as Record<string, unknown>,
+       translations,
+     );
++    // Stock MaaEnd Agents already understand MacOS as a desktop controller.
++    // Keep the interface type independent, without entering Win32 registry paths.
++    if (controller.type === 'EndPlayDesktop') {
++      resolved.type = 'MacOS';
++    }
+     envs.PI_CONTROLLER = JSON.stringify(resolved);
+   }
+ 
 diff --git a/src/utils/useMaaCallbackLogger.ts b/src/utils/useMaaCallbackLogger.ts
 index 0e3c055..57bb4da 100644
 --- a/src/utils/useMaaCallbackLogger.ts
@@ -987,15 +1003,15 @@ index 0000000..6bc9088
 +});
 diff --git a/tests/piEnv.test.ts b/tests/piEnv.test.ts
 new file mode 100644
-index 0000000..f79b3f2
+index 0000000..b703713
 --- /dev/null
 +++ b/tests/piEnv.test.ts
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,36 @@
 +import { test } from 'node:test';
 +import assert from 'node:assert/strict';
 +import type { ControllerItem, ProjectInterface } from '../src/types/interface.ts';
 +
-+test('PI_CONTROLLER preserves the declared controller type for agents', async () => {
++test('PI_CONTROLLER adapts EndPlayDesktop for stock agents without changing the interface', async () => {
 +  Object.defineProperty(globalThis, 'localStorage', {
 +    configurable: true,
 +    value: { getItem: () => null },
@@ -1009,7 +1025,10 @@ index 0000000..f79b3f2
 +      endplaydesktop: { python: '/python', project_dir: '/project' },
 +    },
 +    { name: 'PlayCover', type: 'PlayCover', playcover: { uuid: 'maa.endplaydesktop' } },
++    { name: 'MacOS', type: 'MacOS' },
++    { name: 'Win32-Front', type: 'Win32' },
 +  ] as ControllerItem[]) {
++    const original = structuredClone(controller);
 +    const env = buildPiEnvVars({
 +      projectInterface: { controller: [controller], resource: [] } as unknown as ProjectInterface,
 +      controllerName: controller.name,
@@ -1018,6 +1037,9 @@ index 0000000..f79b3f2
 +      language: 'zh-CN',
 +      maaVersion: null,
 +    });
-+    assert.deepEqual(JSON.parse(env.PI_CONTROLLER), controller);
++    const expected =
++      controller.type === 'EndPlayDesktop' ? { ...controller, type: 'MacOS' } : controller;
++    assert.deepEqual(JSON.parse(env.PI_CONTROLLER), expected);
++    assert.deepEqual(controller, original);
 +  }
 +});

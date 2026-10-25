@@ -12,7 +12,7 @@
 | --- | --- |
 | `src/`、`CMakeLists.txt` | 游戏插件源码与构建配置 |
 | `tools/EndPlayDesktop/`、`patch.py` | 控制器、截图与补丁工具 |
-| `patches/` | MXU 与 MaaEnd Go Agent 的源码补丁 |
+| `patches/` | MXU 控制器源码补丁 |
 | `packaging/` | 一键补丁应用的打包配置 |
 | `tests/`、`docs/` | 测试与详细文档 |
 
@@ -26,11 +26,11 @@
 4. 完全退出 MaaEnd，打开 `.dmg` 中的 `EndPlayDesktopPatch.app`，选择已安装的 `MaaEnd.app`，点击“应用补丁”。
 5. 重新打开 MaaEnd，选择 **EndPlayDesktop** 控制器，填写游戏的 MaaTools 地址并连接。
 
-补丁保留 MaaEnd 原有功能，为除开启、关闭游戏以外的 Windows 任务添加兼容标记；兼容标记不代表所有任务均已实测。MaaEnd 更新后，一般情况重新应用补丁即可。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
+补丁保留 MaaEnd 原有功能，为除开启、关闭游戏以外的 Windows 任务添加兼容标记；兼容标记不代表所有任务均已实测。补丁保留目标包自己的 Go/C++ Agent、MaaFramework 与业务资源。MaaEnd 常规更新后，使用同一工具重新应用补丁即可，无需为每个版本重新构建 Agent。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
 
 ## 自行构建
 
-需要 Xcode、CMake、Ninja、Git、Go、Node.js 22、pnpm、Rust、tauri 和 uv 环境。在本仓库根目录运行：
+需要 Xcode、CMake、Ninja、Git、Node.js 22、pnpm、Rust、tauri 和 uv 环境。在本仓库根目录运行：
 
 ```bash
 uv sync --group bundle
@@ -42,8 +42,8 @@ cmake --build build
 # 构建 MaaEnd 补丁，首次运行会下载上游源码和依赖
 uv run python patch.py build --app /Applications/MaaEnd.app --mxu-source .cache/sources/MXU
 
-# 打包一键应用；将 v2.33.0 替换为上一步输出的 MaaEnd 版本
-uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/v2.33.0
+# 打包可复用于后续 MaaEnd 更新的一键补丁
+uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/desktop
 ```
 
 插件产物为 `build/libEndPlayDesktop.dylib`；补丁程序位于 `dist/`。

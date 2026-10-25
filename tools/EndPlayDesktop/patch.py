@@ -7,6 +7,7 @@ import hashlib
 import json
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,30 @@ DEFAULT_APP = Path("/Applications/MaaEnd.app")
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest() if hasattr(hashlib, "file_digest") else hashlib.sha256(stream.read()).hexdigest()
+
+
+def executable_identity(path: Path) -> str:
+    # Re-signing the app changes its executable's signature and raw hash, but
+    # preserves the linker's LC_UUID build identifier. verify_app checks integrity.
+    with path.open("rb") as stream:
+        header = stream.read(32)
+        if len(header) == 32 and header[:4] == b"\xcf\xfa\xed\xfe":
+            commands, size = struct.unpack_from("<II", header, 16)
+            end = 32 + size
+            for _ in range(commands):
+                offset = stream.tell()
+                raw = stream.read(8)
+                if len(raw) != 8:
+                    break
+                command, length = struct.unpack("<II", raw)
+                if length < 8 or offset + length > end:
+                    break
+                if command == 0x1B and length == 24:  # LC_UUID
+                    uuid = stream.read(16)
+                    if len(uuid) == 16:
+                        return "macho:" + uuid.hex()
+                stream.seek(offset + length)
+    return "sha256:" + digest(path)
 
 
 def read_json(path: Path) -> dict:
@@ -137,16 +162,49 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
     return changes, filters
 
 
-def load_payload(payload: Path, app: Path) -> tuple[dict, str]:
+def load_payload(payload: Path) -> tuple[dict, str]:
     manifest = read_json(payload / "manifest.json")
-    if manifest.get("format") != 1:
-        raise ValueError("Unsupported patch payload format")
+    if manifest.get("format") != 2:
+        raise ValueError("Unsupported patch payload format; rebuild the controller-only payload")
     if manifest.get("architecture") != "arm64":
         raise ValueError("Only the Apple Silicon payload is supported")
-    for name in ("mxu", "go-service"):
+    if set(manifest["files"]) != {"mxu"}:
+        raise ValueError("The patch payload must contain only MXU; upstream Agents must be preserved")
+    for name in manifest["files"]:
         if digest(contained(payload, manifest["files"][name]["path"])) != manifest["files"][name]["sha256"]:
             raise ValueError(f"Corrupt patch payload: {name}")
     return manifest, digest(payload / "manifest.json")
+
+
+def original_agent(app: Path, receipt: dict, version: str) -> Path | None:
+    """Recover an Agent overwritten by v1 patches, never from another release."""
+    if not receipt or receipt.get("format") == 2:
+        return None
+    if receipt.get("format") != 1:
+        raise ValueError("Unsupported EndPlayDesktop receipt format")
+    seen = {app.resolve()}
+    while receipt.get("backup"):
+        donor = Path(receipt["backup"]) / "MaaEnd.app"
+        if not donor.is_dir() or donor.resolve() in seen:
+            break
+        seen.add(donor.resolve())
+        _, directory, donor_version = app_info(donor)
+        if donor_version != version:
+            break
+        donor_receipt = donor / RECEIPT
+        if not donor_receipt.exists():
+            verify_original(donor)
+            agent = directory / "agent/go-service"
+            if agent.is_file():
+                return agent
+            break
+        receipt = read_json(donor_receipt)
+        if receipt.get("format") != 1:
+            break
+    raise ValueError(
+        "旧版补丁曾替换 Go Agent，未找到同版本的未修改备份。"
+        "请重新安装当前版本的官方 MaaEnd.app，再应用此补丁；任务配置无需删除。"
+    )
 
 
 def running(app: Path) -> bool:
@@ -204,11 +262,15 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
                 runtime_python: Path | None = None) -> dict:
     if running(app):
         raise ValueError("Quit MaaEnd before applying the patch")
-    manifest, payload_id = load_payload(payload, app)
+    manifest, payload_id = load_payload(payload)
     info, directory, version = app_info(app)
     changes, filters = resource_changes(directory, runtime, runtime_python)
     existing = read_json(app / RECEIPT) if (app / RECEIPT).exists() else {}
-    if existing.get("payload_id") == payload_id and not changes:
+    agent = original_agent(app, existing, version)
+    if (existing.get("format") == 2 and existing.get("payload_id") == payload_id
+            and existing.get("maaend_version") == version and not changes
+            and executable_identity(directory / info["CFBundleExecutable"])
+            == executable_identity(contained(payload, manifest["files"]["mxu"]["path"]))):
         verify_app(app)
         return {"status": "already_applied", "version": version}
     verify_original(app)
@@ -223,18 +285,19 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
         target = staged / "Contents/MacOS"
         for relative, value in changes.items():
             write_json(target / relative, value)
-        destinations = {"mxu": target / info["CFBundleExecutable"], "go-service": target / "agent/go-service"}
-        for name, destination in destinations.items():
-            shutil.copy2(contained(payload, manifest["files"][name]["path"]), destination)
-            destination.chmod(0o755)
+        destination = target / info["CFBundleExecutable"]
+        shutil.copy2(contained(payload, manifest["files"]["mxu"]["path"]), destination)
+        destination.chmod(0o755)
+        if agent is not None:
+            shutil.copy2(agent, target / "agent/go-service")
         write_json(staged / RECEIPT, {
-            "format": 1, "payload_id": payload_id, "maaend_version": version,
+            "format": 2, "payload_id": payload_id, "maaend_version": version,
             "backup": str(backup), "runtime": str(runtime),
         })
         sign_app(staged, [target / relative for relative in changes])
         swap_app(app, staged)
     return {"status": "applied", "version": version, "changed_resource_files": len(changes),
-            "changed_controller_filters": filters, "backup": str(backup)}
+            "changed_controller_filters": filters, "backup": str(backup), "recovered_agent": agent is not None}
 
 
 def restore(app: Path, backup: Path) -> dict:
@@ -263,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "restore":
             child.add_argument("--backup", type=Path, required=True)
         if name == "build":
-            child.add_argument("--mxu-source", type=Path, default=ROOT.parent / "MXU")
+            child.add_argument("--mxu-source", type=Path, default=ROOT / ".cache/sources/MXU")
             child.add_argument("--mxu-binary", type=Path, help="Reuse a binary built from the checked MXU source")
             child.add_argument("--target-dir", type=Path)
     args = parser.parse_args(argv)
@@ -276,13 +339,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "restore":
             result = restore(app, args.backup.resolve(strict=True))
         else:
-            payload = (args.payload or ROOT / ".cache/payloads" / version).resolve()
+            payload = (args.payload or ROOT / ".cache/payloads/desktop").resolve()
             if args.command == "plan":
-                _, payload_id = load_payload(payload, app)
+                _, payload_id = load_payload(payload)
                 changes, filters = resource_changes(directory, ROOT)
+                receipt = read_json(app / RECEIPT) if (app / RECEIPT).exists() else {}
+                agent = original_agent(app, receipt, version)
                 result = {"app": str(app), "version": version, "payload_id": payload_id,
                           "resource_files": [str(p) for p in changes], "changed_controller_filters": filters,
-                          "excluded": list(EXCLUDED), "executables": ["MXU", "Go Agent"]}
+                          "excluded": list(EXCLUDED), "executables": ["MXU"],
+                          "recover_agent_from": str(agent) if agent else None}
             else:
                 result = apply_patch(app, payload, ROOT, ROOT / "backups/apps")
         print(json.dumps(result, ensure_ascii=False, indent=2))

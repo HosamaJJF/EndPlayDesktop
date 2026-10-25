@@ -3,11 +3,5 @@
     "repository": "https://github.com/MistEO/MXU.git",
     "tag": "v2.8.0",
     "commit": "5e923e83b30a102fb78da35c30ee2e1559aea682"
-  },
-  "maaend": {
-    "repository": "https://github.com/MaaEnd/MaaEnd.git",
-    "tested": {
-      "v2.33.0": "39a22f9176a2484c38c10d256b8f595d4370f6a9"
-    }
   }
 }

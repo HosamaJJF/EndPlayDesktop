@@ -40,7 +40,8 @@ def run_task(controller: Any, install: Path, entry: str, override: dict) -> bool
     log_dir = install / "debug/EndPlayDesktop"
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env["PI_CONTROLLER"] = json.dumps({"name": "EndPlayDesktop", "type": "EndPlayDesktop"})
+    # Use a desktop kind understood by stock Agents, keeping Win32 registry paths disabled.
+    env["PI_CONTROLLER"] = json.dumps({"name": "EndPlayDesktop", "type": "MacOS"})
     env["PI_RESOURCE"] = json.dumps({"name": "官服", "path": [str(install / "resource")]}, ensure_ascii=False)
     env["PATH"] = os.pathsep.join([str(install / "agent"), str(install / "maafw"), env.get("PATH", "")])
     with contextlib.ExitStack() as stack:

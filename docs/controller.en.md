@@ -8,21 +8,27 @@ This repository maintains the controller, MaaTools capture client, and MaaEnd.ap
 
 ## Responsibilities
 
-`tools/EndPlayDesktop/patch.py` updates controller restrictions in the original app interface and imported task files. `patches/mxu.patch` and `patches/mxu/controller.rs` provide a separate controller type, address form, persisted configuration, and creation branch. `patches/maaend-agent.patch` only adds recognition and display of the EndPlayDesktop desktop type in Go Agent.
+`tools/EndPlayDesktop/patch.py` updates controller restrictions in the original app interface and imported task files. `patches/mxu.patch` and `patches/mxu/controller.rs` provide a separate controller type, address form, persisted configuration, and creation branch. Agents recognize the controller through their existing `MacOS` desktop kind, without modification or recompilation.
 
 Pipeline nodes, game resources, business algorithms, original controller settings, MaaEnd version fields, and update sources are not rewritten. MXU update-service sources are outside the patch. MaaEnd continues checking its own official updates; reapply the patch after an update overwrites local support.
 
 ## Building and applying
 
-For normal use, choose the [one-click patch tool](./one-click.en.md) with its bundled runtime. See the root [README](../README.en.md) for CLI commands. Builds check out the official MaaEnd tag matching the app, while MXU defaults to the build reference in `patches/versions.json`. Future versions are attempted by default, without blocking on known-version lists, original executable hashes, or client fingerprints. Actual patch-application failures are handled when encountered; existing edits to the native driver are not overwritten.
+For normal use, choose the [one-click patch tool](./one-click.en.md) with its bundled runtime. See the root [README](../README.en.md) for CLI commands. Builds only produce the MXU controller client, without checking out MaaEnd or compiling Agents. MXU defaults to the build reference in `patches/versions.json`. Future versions are attempted by default, without blocking on known-version lists, original executable hashes, or client fingerprints. Actual patch-application failures are handled when encountered; existing edits to the native driver are not overwritten.
 
-Outputs under `.cache/payloads/<MaaEnd version>/` contain MXU, the matching Go Agent, and a hash manifest. Installation verifies payload integrity, without using the target version or original executable hashes as compatibility restrictions. Maintainers can reuse an existing client through `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu`; maintainers are responsible for the binary's provenance with this option.
+Outputs under `.cache/payloads/desktop/` contain only MXU and a hash manifest and can be reused across MaaEnd releases. Go/C++ Agents, MaaFramework libraries, Pipelines, and business data come from the target app. Installation verifies payload integrity, without using the target version or original executable hashes as compatibility restrictions. Maintainers can reuse an existing client through `build --mxu-source /path/to/MXU --mxu-binary /path/to/mxu`; maintainers are responsible for the binary's provenance with this option.
 
 `apply` modifies and signs a temporary copy before replacing the app, backing up the complete original under `backups/apps/`. Reapplying the same patch does not duplicate controller registration. `restore` restores the backup without changing the user configuration directory managed by normal MXU. A receipt at `Contents/Resources/EndPlayDesktop/receipt.json` identifies the patch and associated backup.
 
+## Upstream updates and migration
+
+Reapply the same tool after ordinary MaaEnd updates. It discovers restrictions in new tasks and options and keeps updated Agents and resources. Task, algorithm, and data updates do not require a new patch release. Changes to ProjectInterface, the Agent protocol, controller APIs, or the MaaFramework ABI still require compatibility review of the MXU controller client.
+
+Tools through 0.0.2 replaced Go Agent. When a legacy receipt is found, the new tool restores the official Agent only from an unpatched backup of the same MaaEnd version, following earlier backup receipts if necessary. If no suitable backup exists, installation stops before modifying the app and asks for a fresh official installation of the current MaaEnd version. It never retains the downgraded Agent or restores one from another release.
+
 ## Controller and task scope
 
-EndPlayDesktop uses Windows VK codes and PC base resources, without loading `resource_adb`, `resource_playcover`, or `MacOSKeyMap.json`. `PI_CONTROLLER.type` stays `EndPlayDesktop`; Go Agent normalizes it as a desktop type, while C++ navigation uses its desktop input backend.
+EndPlayDesktop uses Windows VK codes and PC base resources, without loading `resource_adb`, `resource_playcover`, or `MacOSKeyMap.json`. The interface and saved controller type remain `EndPlayDesktop`. Only `PI_CONTROLLER.type` passed to Agents maps to the supported `MacOS` desktop kind; the name stays `EndPlayDesktop`. C++ navigation keeps its desktop backend. This mapping neither loads macOS keycode/resource overlays nor enables Win32 registry reads. The CLI uses the same convention.
 
 The patch discovers controller names from `type=Win32` and appends EndPlayDesktop to matching task and option restriction lists, without a complete static task inventory. `LaunchGamePC`, `CloseGamePC`, and their options remain excluded. Other restrictions and option defaults are retained. Compatibility entries do not establish adaptation or testing of every task.
 

@@ -2,6 +2,22 @@
 
 [English](./validation.en.md)
 
+## 2026-10-25：0.0.3 上游更新兼容
+
+使用官方 MaaEnd `v2.36.0-beta.1` 原包副本验证，未修改已安装应用，也未操作游戏。
+
+- 52 项 Python 测试、12 项 MXU TypeScript 测试通过；TypeScript 检查、Vite 和 Rust release 构建通过。
+- 补丁产物只含 MXU 与清单，打包流程不再下载、编译或分发 Go Agent。
+- 虚拟控制器使用 `PI_CONTROLLER.type=MacOS`，官方 Agent 正确识别为桌面类型。相同的 `configure_minimum_price` 参数调用在官方 Agent 上成功，在旧 v2.33.0 补丁 Agent 上复现失败。
+- 应用前后 2800 个 Agent、MaaFramework、资源、数据、本地化文件及 `Info.plist` 的内容哈希一致；修改 45 个接口/任务文件、47 处控制器限制。
+- 严格完整签名校验通过；重复应用返回 `already_applied`；恢复备份成功。
+- 模拟旧版补丁覆盖 Agent 后，从同版本原包备份恢复成功，Agent 与原包逐字节一致；缺少备份、备份版本不符及循环备份路径的拒绝分支有单元测试覆盖。
+- 重新签名会改变主程序原始哈希，重复应用按 Mach-O 构建 UUID 判断，并继续校验完整签名。
+
+以上验证覆盖参数兼容与包体完整性，不等同于完整游戏据点交易流程验收。ProjectInterface、Agent 协议、控制器 API 或 MaaFramework ABI 大改时仍需重新评估兼容性。
+
+## 历史验证
+
 文中的 `0.1.x` 为公开发布前的内部验证编号；首次公开版本统一为 `0.0.1`，包含这些功能。
 
 2026-10-17，使用原始 MaaEnd.app `v2.33.0`、Apple Silicon 和 EndPlayDesktop `0.1.7` 验证。

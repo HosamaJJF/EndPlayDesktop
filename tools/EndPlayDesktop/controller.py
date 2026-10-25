@@ -81,7 +81,7 @@ class EndPlayDesktopDevice:
         return "maa.endplaydesktop"
 
     def get_custom_info(self) -> dict:
-        # C++ 使用桌面输入后端；Go 由 PI_CONTROLLER 识别为独立的 EndPlayDesktop 桌面控制器。
+        # C++ 使用桌面输入后端；PI_CONTROLLER 使用上游支持的 MacOS 桌面类型。
         return {"backend": "EndPlayDesktop", "layout": "desktop", "keycode": "win32_vk"}
 
     def screencap(self) -> np.ndarray:

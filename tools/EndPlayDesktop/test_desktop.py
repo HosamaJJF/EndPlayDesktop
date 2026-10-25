@@ -25,12 +25,10 @@ class DistributionTests(unittest.TestCase):
         source.parent.mkdir(parents=True)
         source.write_text("# actual packaged runtime source")
         write_json(self.resources / "distribution.json", {
-            "version": "0.0.1", "build_id": "test-package", "payloads": ["v2.33.0"],
-            "default_payload": "v2.33.0",
+            "format": 2, "version": "0.0.1", "build_id": "test-package", "payload": "desktop",
         })
         with zipfile.ZipFile(self.resources / "payloads.zip", "w") as archive:
-            for name in ("mxu", "go-service"):
-                archive.writestr("v2.33.0/" + name, b"original payload bytes")
+            archive.writestr("desktop/mxu", b"original payload bytes")
         self.distribution = Distribution(self.app)
         self.support = self.root / "Application Support/EndPlayDesktop"
 
@@ -41,17 +39,18 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(installed.python.read_bytes(), b"frozen launcher")
         self.assertTrue((installed.project / "tools/EndPlayDesktop/sidecar.py").is_file())
 
-    def test_future_target_versions_use_bundled_payload_without_a_whitelist(self) -> None:
-        payload = self.distribution.install_payload("v999.0.0", self.support)
+    def test_controller_payload_is_independent_of_the_upstream_release(self) -> None:
+        payload = self.distribution.install_payload(self.support)
         self.assertEqual((payload / "mxu").read_bytes(), b"original payload bytes")
-        self.assertTrue((payload / "go-service").stat().st_mode & 0o111)
-        self.assertEqual(self.distribution.install_payload("v999.0.1", self.support), payload)
+        self.assertTrue((payload / "mxu").stat().st_mode & 0o111)
+        self.assertFalse((payload / "go-service").exists())
+        self.assertEqual(self.distribution.install_payload(self.support), payload)
 
     def test_payload_archive_cannot_escape_the_install_directory(self) -> None:
         with zipfile.ZipFile(self.resources / "payloads.zip", "w") as archive:
             archive.writestr("../../outside.txt", b"unexpected file")
         with self.assertRaisesRegex(ValueError, "escapes"):
-            self.distribution.install_payload("v2.33.0", self.support)
+            self.distribution.install_payload(self.support)
         self.assertFalse((self.support / "outside.txt").exists())
 
 

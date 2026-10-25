@@ -51,11 +51,11 @@ class Distribution:
             raise ValueError("内置运行环境不完整，请重新下载补丁工具。")
         return runtime
 
-    def install_payload(self, target_version: str, support: Path = SUPPORT) -> Path:
+    def install_payload(self, support: Path = SUPPORT) -> Path:
         metadata = self.metadata
-        version = target_version if target_version in metadata["payloads"] else metadata["default_payload"]
+        payload = metadata["payload"]
         parent = contained(support, Path("payloads") / self.key)
-        destination = contained(parent, version)
+        destination = contained(parent, payload)
         if not destination.exists():
             parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=".payload-", dir=parent) as temporary:
@@ -69,9 +69,8 @@ class Distribution:
                             path.parent.mkdir(parents=True, exist_ok=True)
                             with archive.open(member) as source, path.open("wb") as output:
                                 shutil.copyfileobj(source, output)
-                for name in ("mxu", "go-service"):
-                    contained(stage, Path(version) / name).chmod(0o755)
-                contained(stage, version).rename(destination)
+                contained(stage, Path(payload) / "mxu").chmod(0o755)
+                contained(stage, payload).rename(destination)
         return destination
 
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import plistlib
+import shutil
+import struct
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -51,6 +53,9 @@ class AppPatchTests(unittest.TestCase):
         (self.directory / "MaaEnd").write_bytes(b"original client")
         (self.directory / "agent").mkdir()
         (self.directory / "agent/go-service").write_bytes(b"original agent")
+        (self.directory / "agent/cpp-algo").write_bytes(b"original cpp agent")
+        (self.directory / "maafw").mkdir()
+        (self.directory / "maafw/libMaaFramework.dylib").write_bytes(b"original framework")
         (self.directory / "resource").mkdir()
         (self.directory / "resource/untouched").write_bytes(b"original resource")
         self.runtime = self.root / "EndPlayDesktop"
@@ -60,11 +65,11 @@ class AppPatchTests(unittest.TestCase):
         (self.runtime / "tools/EndPlayDesktop/sidecar.py").touch()
         self.payload = self.root / "payload"
         self.payload.mkdir()
-        for name in ("mxu", "go-service"):
+        for name in ("mxu",):
             (self.payload / name).write_bytes(b"patched " + name.encode())
         self.manifest = {
-            "format": 1, "maaend_version": "v2.33.0", "architecture": "arm64",
-            "files": {name: {"path": name, "sha256": digest(self.payload / name)} for name in ("mxu", "go-service")},
+            "format": 2, "tested_maaend_version": "v2.33.0", "architecture": "arm64",
+            "files": {"mxu": {"path": "mxu", "sha256": digest(self.payload / "mxu")}},
         }
         write_json(self.payload / "manifest.json", self.manifest)
         self.backups = self.root / "backups"
@@ -115,6 +120,9 @@ class AppPatchTests(unittest.TestCase):
         result = apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual((self.directory / "MaaEnd").read_bytes(), b"patched mxu")
+        self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"original agent")
+        self.assertEqual((self.directory / "agent/cpp-algo").read_bytes(), b"original cpp agent")
+        self.assertEqual((self.directory / "maafw/libMaaFramework.dylib").read_bytes(), b"original framework")
         self.assertEqual((self.directory / "resource/untouched").read_bytes(), b"original resource")
         self.assertEqual(app_info(self.app)[0], self.info)
         self.assertTrue((self.app / RECEIPT).is_file())
@@ -138,11 +146,11 @@ class AppPatchTests(unittest.TestCase):
         write_json(self.payload / "manifest.json", self.manifest)
         with self.assertRaisesRegex(ValueError, "format"):
             apply_patch(self.app, self.payload, self.runtime, self.backups)
-        self.manifest["format"] = 1
+        self.manifest["format"] = 2
         write_json(self.payload / "manifest.json", self.manifest)
         (self.payload / "mxu").write_bytes(b"corrupted")
         with self.assertRaisesRegex(ValueError, "Corrupt"):
-            load_payload(self.payload, self.app)
+            load_payload(self.payload)
         (self.payload / "mxu").write_bytes(b"patched mxu")
         self.assertEqual(self.snapshot(), original)
         self.assertFalse(self.backups.exists())
@@ -169,10 +177,116 @@ class AppPatchTests(unittest.TestCase):
         self.interface["version"] = "v999.0.0-rc.1"
         write_json(self.directory / "interface.json", self.interface)
         (self.directory / "MaaEnd").write_bytes(b"future upstream client")
+        (self.directory / "agent/go-service").write_bytes(b"future upstream agent with new operations")
         result = apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual(result["version"], "v999.0.0-rc.1")
         self.assertEqual(app_info(self.app)[0], self.info)
+        self.assertEqual((self.directory / "agent/go-service").read_bytes(),
+                         b"future upstream agent with new operations")
+
+    def test_reapplying_after_an_upstream_update_keeps_new_agents_and_tasks(self) -> None:
+        apply_patch(self.app, self.payload, self.runtime, self.backups)
+        # Simulate an updater retaining the receipt while replacing upstream files.
+        self.interface["version"] = "v2.36.0-beta.1"
+        write_json(self.directory / "interface.json", self.interface)
+        write_json(self.directory / "tasks/normal.json", {
+            "task": [{"name": "NewUpstreamTask", "controller": ["Win32-Front"]}],
+            "option": {"MinimumPrice": {"operation": "configure_minimum_price"}},
+        })
+        (self.directory / "MaaEnd").write_bytes(b"new upstream client")
+        (self.directory / "agent/go-service").write_bytes(b"new upstream agent")
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"new upstream agent")
+        tasks = read_json(self.directory / "tasks/normal.json")
+        self.assertIn(CONTROLLER, tasks["task"][0]["controller"])
+        self.assertEqual(tasks["option"]["MinimumPrice"]["operation"], "configure_minimum_price")
+
+    def test_reapplies_when_only_the_upstream_client_was_replaced(self) -> None:
+        apply_patch(self.app, self.payload, self.runtime, self.backups)
+        (self.directory / "MaaEnd").write_bytes(b"updated client with unchanged resources")
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual((self.directory / "MaaEnd").read_bytes(), b"patched mxu")
+
+    def test_resigning_the_app_does_not_create_another_backup(self) -> None:
+        header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x100000C, 0, 2, 1, 24, 0, 0)
+        executable = header + struct.pack("<II16s", 0x1B, 24, b"build identifier")
+        (self.payload / "mxu").write_bytes(executable + b"payload signature")
+        self.manifest["files"]["mxu"]["sha256"] = digest(self.payload / "mxu")
+        write_json(self.payload / "manifest.json", self.manifest)
+
+        def sign(app: Path, resources: list[Path]) -> None:
+            (app / "Contents/MacOS/MaaEnd").write_bytes(executable + b"app signature")
+
+        self.sign.side_effect = sign
+        apply_patch(self.app, self.payload, self.runtime, self.backups)
+        repeated = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(repeated["status"], "already_applied")
+        self.assertEqual(len(list(self.backups.iterdir())), 1)
+
+    def legacy_install(self) -> Path:
+        donor = self.root / "legacy-backup/MaaEnd.app"
+        donor.parent.mkdir()
+        shutil.copytree(self.app, donor)
+        (self.directory / "agent/go-service").write_bytes(b"outdated patched agent")
+        write_json(self.app / RECEIPT, {
+            "format": 1, "maaend_version": "v2.33.0", "backup": str(donor.parent),
+        })
+        return donor
+
+    def test_legacy_patch_recovers_the_same_release_agent_from_backup(self) -> None:
+        self.legacy_install()
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertTrue(result["recovered_agent"])
+        self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"original agent")
+        self.assertEqual(read_json(self.app / RECEIPT)["format"], 2)
+
+    def test_legacy_patch_follows_backups_past_an_earlier_patched_app(self) -> None:
+        donor = self.legacy_install()
+        intermediate = self.root / "intermediate/MaaEnd.app"
+        intermediate.parent.mkdir()
+        shutil.copytree(self.app, intermediate)
+        receipt = read_json(self.app / RECEIPT)
+        receipt["backup"] = str(intermediate.parent)
+        write_json(self.app / RECEIPT, receipt)
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertTrue(result["recovered_agent"])
+        self.assertEqual((self.directory / "agent/go-service").read_bytes(),
+                         (donor / "Contents/MacOS/agent/go-service").read_bytes())
+
+    def test_legacy_patch_cannot_keep_a_stale_agent_or_restore_another_release(self) -> None:
+        donor = self.legacy_install()
+        for mode in ("wrong_version", "missing", "cycle"):
+            with self.subTest(mode=mode):
+                if mode == "wrong_version":
+                    interface = read_json(donor / "Contents/MacOS/interface.json")
+                    interface["version"] = "v2.32.0"
+                    write_json(donor / "Contents/MacOS/interface.json", interface)
+                elif mode == "missing":
+                    shutil.rmtree(donor)
+                else:
+                    receipt = read_json(self.app / RECEIPT)
+                    receipt["backup"] = str(self.root)
+                    write_json(self.app / RECEIPT, receipt)
+                before = self.snapshot()
+                with self.assertRaisesRegex(ValueError, "官方 MaaEnd"):
+                    apply_patch(self.app, self.payload, self.runtime, self.backups)
+                self.assertEqual(self.snapshot(), before)
+                self.assertFalse(self.backups.exists())
+
+    def test_old_and_agent_containing_payloads_are_rejected_before_mutation(self) -> None:
+        before = self.snapshot()
+        for file_format in (1, 2):
+            with self.subTest(file_format=file_format):
+                self.manifest["format"] = file_format
+                self.manifest["files"]["go-service"] = {"path": "go-service", "sha256": "unused"}
+                write_json(self.payload / "manifest.json", self.manifest)
+                with self.assertRaises(ValueError):
+                    apply_patch(self.app, self.payload, self.runtime, self.backups)
+                self.assertEqual(self.snapshot(), before)
+                self.assertFalse(self.backups.exists())
 
 
 if __name__ == "__main__":
