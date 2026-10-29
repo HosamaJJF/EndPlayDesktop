@@ -50,6 +50,7 @@ struct Api
     void* (*gchandle_get_target)(uint32_t) = nullptr;
     void (*gchandle_free)(uint32_t) = nullptr;
     void (*free)(void*) = nullptr;
+    void* (*thread_current)() = nullptr;
     void* (*thread_attach)(void*) = nullptr;
     bool (*is_vm_thread)(void*) = nullptr;
     void (*format_exception)(void*, char*, int) = nullptr;
@@ -87,7 +88,9 @@ struct Api
         EPD_API(gchandle_get_target)
         EPD_API(gchandle_free)
         EPD_API(free)
+        EPD_API(thread_current)
         EPD_API(thread_attach)
+        EPD_API(is_vm_thread)
 #undef EPD_API
         format_exception = reinterpret_cast<decltype(format_exception)>(dlsym(module, "il2cpp_format_exception"));
         legacy_key = reinterpret_cast<decltype(legacy_key)>(dlsym(module, "UnitySetKeyState"));
@@ -153,7 +156,9 @@ struct Api
 class LegacyBridge
 {
 public:
-    explicit LegacyBridge(Api& api) : api_(api) {}
+    LegacyBridge(Api& api, uint16_t mouse_id, std::function<void(float, float)> warp,
+                 std::function<void()> lock_changed)
+        : api_(api), mouse_id_(mouse_id), warp_(std::move(warp)), lock_changed_(std::move(lock_changed)) {}
     ~LegacyBridge()
     {
         for (const auto& hook : hooks_) if (*hook.slot == hook.replacement) *hook.slot = hook.original;
@@ -197,10 +202,20 @@ public:
         install(input, "get_mousePosition", "UnityEngine.Input::get_mousePosition_Injected(UnityEngine.Vector3&)", reinterpret_cast<void*>(MousePosition));
         install(input, "get_mouseScrollDelta", "UnityEngine.Input::get_mouseScrollDelta_Injected(UnityEngine.Vector2&)", reinterpret_cast<void*>(MouseScroll));
         void* cursor = api_.findClass("UnityEngine", "Cursor");
-        bool visible = true;
-        install(cursor, "set_visible", "UnityEngine.Cursor::set_visible(System.Boolean)", reinterpret_cast<void*>(SetVisible), { "System.Boolean" }, { &visible });
+        visible_ = api_.value<bool>(api_.method(cursor, "get_visible", {}));
+        lock_state_ = api_.value<int>(api_.method(cursor, "get_lockState", {}));
+        install(cursor, "set_visible", "UnityEngine.Cursor::set_visible(System.Boolean)", reinterpret_cast<void*>(SetVisible), { "System.Boolean" }, { &visible_ });
         install(cursor, "get_visible", "UnityEngine.Cursor::get_visible()", reinterpret_cast<void*>(GetVisible));
         install(cursor, "get_lockState", "UnityEngine.Cursor::get_lockState()", reinterpret_cast<void*>(GetLockState));
+        install(cursor, "set_lockState", "UnityEngine.Cursor::set_lockState(UnityEngine.CursorLockMode)", reinterpret_cast<void*>(SetLockState),
+                { "UnityEngine.CursorLockMode" }, { &lock_state_ });
+        void* native_input = api_.findClass("UnityEngineInternal.Input", "NativeInputSystem");
+        int device = mouse_id_, command = 0, size = 0;
+        void* payload = nullptr;
+        ioctl_ = reinterpret_cast<Ioctl>(install(native_input, "IOCTL",
+            "UnityEngineInternal.Input.NativeInputSystem::IOCTL(System.Int32,System.Int32,System.IntPtr,System.Int32)",
+            reinterpret_cast<void*>(DeviceCommand), { "System.Int32", "System.Int32", "System.IntPtr", "System.Int32" },
+            { &device, &command, &payload, &size }));
         ready_ = true;
     }
     void update(const MouseState& state, bool automated, bool physical_scroll = false)
@@ -221,14 +236,23 @@ public:
     }
     bool ready() const { return ready_; }
     uint64_t reads() const { return reads_.load(); }
-    bool wantsPointerLock() const { return !visible_; }
+    bool wantsPointerLock() const { return lock_state_ == 1; }
+    int lockState() const { return lock_state_; }
+    bool visible() const { return visible_; }
+    uint64_t warps() const { return warps_; }
+    uint64_t lockChanges() const { return lock_changes_; }
+    bool canRecenter() const { return !warp_frame_ || *warp_frame_ != frame(); }
 
 private:
     struct Hook { void** slot; void* original; void* replacement; };
     struct Vector2 { float x, y; };
     struct Vector3 { float x, y, z; };
     using Axis = float (*)(void*);
+    using Ioctl = int64_t (*)(int, int, void*, int);
     Api& api_;
+    uint16_t mouse_id_;
+    std::function<void(float, float)> warp_;
+    std::function<void()> lock_changed_;
     std::vector<Hook> hooks_;
     MouseState state_;
     FrameDelta automated_delta_;
@@ -236,6 +260,10 @@ private:
     const void* frame_count_ = nullptr;
     double delta_deadline_ = 0;
     bool ready_ = false, visible_ = true;
+    int lock_state_ = 0;
+    uint64_t warps_ = 0, lock_changes_ = 0;
+    std::optional<uint32_t> warp_frame_;
+    Ioctl ioctl_ = nullptr;
     Axis axis_ = nullptr, raw_axis_ = nullptr;
     std::atomic<uint64_t> reads_ { 0 };
     inline static LegacyBridge* instance_ = nullptr;
@@ -277,7 +305,39 @@ private:
     }
     static void SetVisible(bool visible) { instance_->visible_ = visible; }
     static bool GetVisible() { return instance_->visible_; }
-    static int GetLockState() { return instance_->visible_ ? 0 : 1; }
+    static int GetLockState() { return instance_->lock_state_; }
+    static void SetLockState(int mode)
+    {
+        auto& s = *instance_;
+        if (mode < 0 || mode > 2 || mode == s.lock_state_) return;
+        s.lock_state_ = mode;
+        s.warp_frame_.reset();
+        ++s.lock_changes_;
+        try { s.lock_changed_(); }
+        catch (const std::exception& e) { os_log_error(OS_LOG_DEFAULT, "[EndPlayDesktop] cursor lock failed: %{public}s", e.what()); }
+    }
+    static int64_t DeviceCommand(int device, int command, void* payload, int size)
+    {
+        auto& s = *instance_;
+        if (device != s.mouse_id_ || static_cast<uint32_t>(command) != FourCC('W', 'A', 'R', 'P')) {
+            return s.ioctl_(device, command, payload, size);
+        }
+        if (!payload || size != static_cast<int>(sizeof(Vector2))) return -1;
+        Vector2 point;
+        std::memcpy(&point, payload, sizeof(point));
+        if (!std::isfinite(point.x) || !std::isfinite(point.y)) return -1;
+        try {
+            // A synthetic Mouse has no native cursor to warp. Keep its queued
+            // state and Legacy Input in sync without moving the host pointer.
+            s.warp_frame_ = s.frame();
+            s.warp_(point.x, point.y);
+            ++s.warps_;
+            return 1;
+        } catch (const std::exception& e) {
+            os_log_error(OS_LOG_DEFAULT, "[EndPlayDesktop] cursor warp failed: %{public}s", e.what());
+            return -1;
+        }
+    }
 };
 
 
@@ -362,7 +422,15 @@ struct Runtime::Impl
     bool initialize()
     {
         if (!bound) bound = api.bind();
-        if (!bound || !api.domain_get()) return false;
+        if (!bound) return false;
+        // domain_get can initialize managed AppDomain state and crash before
+        // Unity attaches its main thread. Wait for the engine, never attach it early.
+        void* thread = api.thread_current();
+        if (!thread || !api.is_vm_thread(thread)) {
+            error = "waiting for Unity IL2CPP main thread";
+            return false;
+        }
+        if (!api.domain_get()) return false;
         // UIKit 主线程也是 Unity 的执行线程。附加后不分离，避免使引擎自己的线程失效。
         api.thread_attach(api.domain_get());
         void* info = api.findClass("Beyond", "DeviceInfo");
@@ -460,9 +528,11 @@ struct Runtime::Impl
         if (keyboard.size() < 14 || mouse_size < sizeof(MouseState)) throw std::runtime_error("Input System state buffer too small");
         mouse.x = width / 2.0f;
         mouse.y = height / 2.0f;
-        legacy = std::make_unique<LegacyBridge>(api);
+        legacy = std::make_unique<LegacyBridge>(api, mouse_id,
+            [this](float x, float y) { warp(x, y); }, [this] { syncCursorLock(); });
         legacy->initialize();
         legacy->update(mouse, false);
+        syncCursorLock();
         desktopMode();
         initialized = true;
         error.clear();
@@ -553,13 +623,38 @@ struct Runtime::Impl
 
     void position(float x, float y, bool delta, bool physical = false)
     {
-        const float new_x = std::clamp(x, 0.0f, static_cast<float>(width - 1));
-        const float new_y = height - 1 - std::clamp(y, 0.0f, static_cast<float>(height - 1));
-        mouse.dx = delta ? new_x - mouse.x : 0;
-        mouse.dy = delta ? new_y - mouse.y : 0;
+        const bool locked = legacy && legacy->wantsPointerLock();
+        const float new_x = locked ? width / 2.0f : std::clamp(x, 0.0f, static_cast<float>(width - 1));
+        const float new_y = locked ? height / 2.0f : height - 1 - std::clamp(y, 0.0f, static_cast<float>(height - 1));
+        mouse.dx = delta && !locked ? new_x - mouse.x : 0;
+        mouse.dy = delta && !locked ? new_y - mouse.y : 0;
         mouse.x = new_x;
         mouse.y = new_y;
         queueMouse(!physical);
+    }
+
+    void warp(float x, float y)
+    {
+        if (legacy && legacy->lockState() == 2) {
+            x = std::clamp(x, 0.0f, static_cast<float>(width - 1));
+            y = std::clamp(y, 0.0f, static_cast<float>(height - 1));
+        }
+        mouse.x = x;
+        mouse.y = y;
+        queueMouse();
+    }
+
+    void syncCursorLock()
+    {
+        if (!legacy) return;
+        if (legacy->wantsPointerLock() && legacy->canRecenter()) {
+            const float x = width / 2.0f, y = height / 2.0f;
+            if (mouse.x != x || mouse.y != y) warp(x, y);
+        } else if (legacy->lockState() == 2) {
+            const float x = std::clamp(mouse.x, 0.0f, static_cast<float>(width - 1));
+            const float y = std::clamp(mouse.y, 0.0f, static_cast<float>(height - 1));
+            if (mouse.x != x || mouse.y != y) warp(x, y);
+        }
     }
 
     void button(int button, bool down, bool physical = false)
@@ -625,7 +720,11 @@ Runtime::Runtime(std::function<bool()> native_focus) : impl_(std::make_unique<Im
 {
     impl_->native_focus = native_focus ? std::move(native_focus) : [] { return [NativeApplicationActive() isEqual:@YES]; };
 }
-Runtime::~Runtime() = default;
+Runtime::~Runtime()
+{
+    endSession();
+    impl_->cleanupDevices();
+}
 Runtime& GetRuntime() { static Runtime* runtime = new Runtime; return *runtime; }
 bool Runtime::ready() const { return impl_->initialized && !impl_->fatal; }
 bool Runtime::automationActive() const { return impl_->active; }
@@ -647,6 +746,7 @@ void Runtime::tick()
         s.width = s.api.value<int>(s.get_width);
         s.height = s.api.value<int>(s.get_height);
         if (s.width <= 0 || s.height <= 0) throw std::runtime_error("invalid game render resolution");
+        s.syncCursorLock();
         if (s.api.value<int>(s.get_input) == 1) s.desktopMode();
     } catch (const std::exception& exception) {
         s.error = exception.what();
@@ -681,6 +781,11 @@ NSDictionary* Runtime::status() const
               @"ticks": @(s.ticks), @"input_update_count": @(updates), @"keycode": @"win32_vk",
               @"legacy_keyboard": @(s.api.legacy_key != nullptr), @"legacy_mouse_axes": @(s.legacy && s.legacy->ready()),
               @"legacy_input_reads": @(s.legacy ? s.legacy->reads() : 0),
+              @"cursor_sync_mode": @"unity_commands_and_lock",
+              @"cursor_visible": @(s.legacy && s.legacy->visible()),
+              @"cursor_lock_state": @(s.legacy ? s.legacy->lockState() : 0),
+              @"game_cursor_warps": @(s.legacy ? s.legacy->warps() : 0),
+              @"game_cursor_lock_changes": @(s.legacy ? s.legacy->lockChanges() : 0),
               @"cursor_lock_requested": @(wantsPointerLock()), @"native_delta_events": @(s.native_delta_events),
               @"focused": focused, @"input_type": input_type, @"run_in_background": background, @"background_behavior": behavior,
               @"native_app_active": NativeApplicationActive(),

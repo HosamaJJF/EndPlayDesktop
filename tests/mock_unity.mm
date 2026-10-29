@@ -16,9 +16,13 @@ struct MockClass;
 struct Object { MockClass* klass = nullptr; std::vector<uint8_t> data; std::string text; };
 struct MockMethod
 {
+    void* entry = nullptr;
     std::string name;
     std::vector<std::string> types;
     std::function<Object*(Object*, void**)> run;
+    MockMethod(std::string name, std::vector<std::string> types,
+               std::function<Object*(Object*, void**)> run, void* entry = nullptr)
+        : entry(entry), name(std::move(name)), types(std::move(types)), run(std::move(run)) {}
 };
 struct MockClass { std::string space, name; std::vector<MockMethod> methods; };
 struct Device { uint32_t format; int id; uint32_t size; };
@@ -28,6 +32,8 @@ std::map<uint32_t, Object*> handles;
 std::vector<std::vector<uint8_t>> events;
 int input_type = 1, platform = 0, focus = 0;
 bool background = false, fail_enable = false;
+bool vm_ready = true;
+uint32_t domain_queries = 0;
 uint32_t next_handle = 1;
 MockClass *device_class = nullptr, *settings_class = nullptr;
 Object *runtime = nullptr, *settings = nullptr, *manager = nullptr;
@@ -160,7 +166,14 @@ EXPORTED void EPDTestMouse(MouseState* result)
     *result = {};
 }
 
-EXPORTED void* il2cpp_domain_get() { return reinterpret_cast<void*>(1); }
+EXPORTED void EPDTestSetVmReady(bool ready) { vm_ready = ready; }
+EXPORTED uint32_t EPDTestDomainQueries() { return domain_queries; }
+EXPORTED void* il2cpp_domain_get()
+{
+    ++domain_queries;
+    if (!vm_ready) throw std::runtime_error("managed AppDomain is not initialized");
+    return reinterpret_cast<void*>(1);
+}
 EXPORTED const void** il2cpp_domain_get_assemblies(void*, size_t* count) { static const void* assemblies[] = { reinterpret_cast<void*>(1) }; *count = 1; return assemblies; }
 EXPORTED const void* il2cpp_assembly_get_image(const void* image) { return image; }
 EXPORTED void* il2cpp_class_from_name(const void*, const char* space, const char* name)
@@ -201,4 +214,103 @@ EXPORTED void* il2cpp_gchandle_get_target(uint32_t id) { return handles.at(id); 
 EXPORTED void il2cpp_gchandle_free(uint32_t id) { handles.erase(id); }
 EXPORTED void il2cpp_free(void* memory) { std::free(memory); }
 EXPORTED void* il2cpp_thread_attach(void* domain) { return domain; }
+EXPORTED void* il2cpp_thread_current() { return vm_ready ? reinterpret_cast<void*>(1) : nullptr; }
+EXPORTED bool il2cpp_is_vm_thread(void* thread) { return vm_ready && thread; }
 EXPORTED void il2cpp_format_exception(void* object, char* text, int size) { strlcpy(text, static_cast<Object*>(object)->text.c_str(), static_cast<size_t>(size)); }
+
+// These wrappers reproduce IL2CPP's writable icall caches. The cursor tests
+// exercise the production resolver and hooks rather than calling hooks directly.
+struct FixtureVector2 { float x, y; };
+struct FixtureVector3 { float x, y, z; };
+static bool cursor_visible = true;
+static int cursor_lock = 0;
+static uint32_t cursor_frame = 1;
+static float OriginalAxis(void*) { return 0; }
+static bool OriginalPresent() { return true; }
+static void OriginalPosition(FixtureVector3* p) { *p = { -10, -20, 0 }; }
+static void OriginalScroll(FixtureVector2* p) { *p = {}; }
+static void OriginalSetVisible(bool value) { cursor_visible = value; }
+static bool OriginalVisible() { return cursor_visible; }
+static void OriginalSetLock(int value) { cursor_lock = value; }
+static int OriginalLock() { return cursor_lock; }
+static int64_t OriginalIoctl(int, int, void*, int) { return -99; }
+
+#define FIXTURE_ICALL(name, original, text) \
+    extern "C" { void* name##Slot = reinterpret_cast<void*>(original); } \
+    asm(".section __TEXT,__cstring,cstring_literals\n" \
+        "L" #name "Name:\n.asciz \"" text "\"\n" \
+        ".text\n.p2align 2\n.globl _" #name "\n_" #name ":\n" \
+        "adrp x16, _" #name "Slot@PAGE\n" \
+        "ldr x16, [x16, _" #name "Slot@PAGEOFF]\n" \
+        "cbnz x16, L" #name "Cached\n" \
+        "adrp x0, L" #name "Name@PAGE\n" \
+        "add x0, x0, L" #name "Name@PAGEOFF\n" \
+        "L" #name "Cached:\nbr x16\n");
+
+extern "C" {
+float FixtureAxis(void*);
+float FixtureRawAxis(void*);
+bool FixturePresent();
+void FixturePosition(FixtureVector3*);
+void FixtureScroll(FixtureVector2*);
+void FixtureSetVisible(bool);
+bool FixtureVisible();
+void FixtureSetLock(int);
+int FixtureLock();
+int64_t FixtureIoctl(int, int, void*, int);
+}
+FIXTURE_ICALL(FixtureAxis, OriginalAxis, "UnityEngine.Input::GetAxis(System.String)")
+FIXTURE_ICALL(FixtureRawAxis, OriginalAxis, "UnityEngine.Input::GetAxisRaw(System.String)")
+FIXTURE_ICALL(FixturePresent, OriginalPresent, "UnityEngine.Input::get_mousePresent()")
+FIXTURE_ICALL(FixturePosition, OriginalPosition, "UnityEngine.Input::get_mousePosition_Injected(UnityEngine.Vector3&)")
+FIXTURE_ICALL(FixtureScroll, OriginalScroll, "UnityEngine.Input::get_mouseScrollDelta_Injected(UnityEngine.Vector2&)")
+FIXTURE_ICALL(FixtureSetVisible, OriginalSetVisible, "UnityEngine.Cursor::set_visible(System.Boolean)")
+FIXTURE_ICALL(FixtureVisible, OriginalVisible, "UnityEngine.Cursor::get_visible()")
+FIXTURE_ICALL(FixtureSetLock, OriginalSetLock, "UnityEngine.Cursor::set_lockState(UnityEngine.CursorLockMode)")
+FIXTURE_ICALL(FixtureLock, OriginalLock, "UnityEngine.Cursor::get_lockState()")
+FIXTURE_ICALL(FixtureIoctl, OriginalIoctl, "UnityEngineInternal.Input.NativeInputSystem::IOCTL(System.Int32,System.Int32,System.IntPtr,System.Int32)")
+#undef FIXTURE_ICALL
+
+EXPORTED void UnitySetKeyState(int, bool) {}
+EXPORTED int32_t il2cpp_string_length(void* value) { return static_cast<int32_t>(static_cast<Object*>(value)->text.size()); }
+EXPORTED const uint16_t* il2cpp_string_chars(void* value)
+{
+    // Test strings are ASCII, and only one string is inspected at a time.
+    static std::u16string chars;
+    const auto& text = static_cast<Object*>(value)->text;
+    chars.assign(text.begin(), text.end());
+    return reinterpret_cast<const uint16_t*>(chars.data());
+}
+
+EXPORTED void EPDTestEnableCursorHooks()
+{
+    AddClass("UnityEngine", "Input", {
+        { "GetAxis", { "System.String" }, [](Object*, void** p) { return Box(FixtureAxis(p[0])); }, reinterpret_cast<void*>(FixtureAxis) },
+        { "GetAxisRaw", { "System.String" }, [](Object*, void** p) { return Box(FixtureRawAxis(p[0])); }, reinterpret_cast<void*>(FixtureRawAxis) },
+        { "get_mousePresent", {}, [](Object*, void**) { return Box(FixturePresent()); }, reinterpret_cast<void*>(FixturePresent) },
+        { "get_mousePosition", {}, [](Object*, void**) { FixtureVector3 p; FixturePosition(&p); return Box(p); }, reinterpret_cast<void*>(FixturePosition) },
+        { "get_mouseScrollDelta", {}, [](Object*, void**) { FixtureVector2 p; FixtureScroll(&p); return Box(p); }, reinterpret_cast<void*>(FixtureScroll) },
+    });
+    AddClass("UnityEngine", "Time", {
+        { "get_frameCount", {}, [](Object*, void**) { return Box(cursor_frame); } },
+    });
+    AddClass("UnityEngine", "Cursor", {
+        { "get_visible", {}, [](Object*, void**) { return Box(FixtureVisible()); }, reinterpret_cast<void*>(FixtureVisible) },
+        { "set_visible", { "System.Boolean" }, [](Object*, void** p) { FixtureSetVisible(*static_cast<bool*>(p[0])); return nullptr; }, reinterpret_cast<void*>(FixtureSetVisible) },
+        { "get_lockState", {}, [](Object*, void**) { return Box(FixtureLock()); }, reinterpret_cast<void*>(FixtureLock) },
+        { "set_lockState", { "UnityEngine.CursorLockMode" }, [](Object*, void** p) { FixtureSetLock(*static_cast<int*>(p[0])); return nullptr; }, reinterpret_cast<void*>(FixtureSetLock) },
+    });
+    AddClass("UnityEngineInternal.Input", "NativeInputSystem", {
+        { "IOCTL", { "System.Int32", "System.Int32", "System.IntPtr", "System.Int32" }, [](Object*, void** p) {
+            return Box(FixtureIoctl(*static_cast<int*>(p[0]), *static_cast<int*>(p[1]), *static_cast<void**>(p[2]), *static_cast<int*>(p[3])));
+        }, reinterpret_cast<void*>(FixtureIoctl) },
+    });
+}
+
+EXPORTED void EPDTestSetCursorVisible(bool value) { FixtureSetVisible(value); }
+EXPORTED bool EPDTestCursorVisible() { return FixtureVisible(); }
+EXPORTED void EPDTestSetCursorLock(int value) { FixtureSetLock(value); }
+EXPORTED int EPDTestCursorLock() { return FixtureLock(); }
+EXPORTED int64_t EPDTestCursorCommand(int device, int command, void* payload, int size) { return FixtureIoctl(device, command, payload, size); }
+EXPORTED void EPDTestLegacyPosition(float* x, float* y) { FixtureVector3 p; FixturePosition(&p); *x = p.x; *y = p.y; }
+EXPORTED void EPDTestAdvanceCursorFrame() { ++cursor_frame; }

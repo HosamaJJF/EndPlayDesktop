@@ -63,6 +63,16 @@ MaaEnd CLI 通过轮询异步任务状态响应 Ctrl-C，两个 Agent 不继承�
 
 自动化鼠标位移从 0.1.6 起声明为 `relative_delta_mode=win32_scaled_single_frame`：Windows 位移按 MaaEnd `MapNavigator/navi_config.h` 的分辨率比例换算，Legacy 增量在同一帧内可重复读取，但不会延续到下一帧。未被读取的菜单增量会过期，绝对位置和按键更新不会覆盖待消费增量。玩家物理输入保留原有路径与灵敏度。当前客户端水平轴实测约为每单位 0.25°；垂直轴实测响应非线性，滑索的 `RelativeMove` 由 MaaEnd 控制器使用 0.1.7 的只读相机接口进行反馈调整，不在插件中改动玩家鼠标灵敏度；修改游戏镜头设置后仍应重新验证。
 
+### 游戏内光标同步
+
+游戏通过 `Mouse.WarpCursorPosition` 发出的重定位请求在 Unity 的设备命令边界处理，只接管 EndPlayDesktop 虚拟鼠标的 `WARP` 命令。新坐标同步到 Input System 与 Legacy Input，后续按下、释放、滚轮或会话清理不会写回重定位前的位置；其他设备与命令仍交给原后端。此过程不移动系统光标，也不要求开启自动化会话。
+
+`Cursor.visible` 与 `Cursor.lockState` 独立保存。Locked 模式使游戏内指针居中，临时重定位在下一次帧更新时恢复居中；None 模式保留游戏请求的位置，Confined 模式约束到渲染区域。宿主光标只在前台且游戏显式请求 Locked 时捕获，单纯隐藏光标不会被当作锁定。
+
+`status` 中的 `cursor_sync_mode=unity_commands_and_lock`、`cursor_visible`、`cursor_lock_state`、`game_cursor_warps` 和 `game_cursor_lock_changes` 用于核对已加载的实现与游戏请求。回归测试覆盖真实 icall 缓存挂接、跨页面位置同步、锁定及解锁、命令透传和无会话的后台重定位；任务与识别资源保持上游原样。
+
+初始化等待 Unity 自身将主线程附加到 IL2CPP VM 后才读取托管 AppDomain，避免窗口恢复提示等早期阶段触发原生崩溃。2026-10-29 实机验证通过启动、后台打开及关闭设置、场景菜单关闭后恢复锁定居中；用户完成完整基质任务测试并确认通过。
+
 ### 滚轮单位与消费
 
 滚轮统一以 Windows 的每格 120 单位作为内部边界：物理输入按格数转成该单位，自动化的 `scroll` 命令直接传入该单位。Input System 每格接收 120，Legacy `mouseScrollDelta` 每格接收 1，`GetAxis` / `GetAxisRaw` 的 `MouseAxis3` 与 `Mouse ScrollWheel` 两个滚轮轴名称每格接收 0.1。

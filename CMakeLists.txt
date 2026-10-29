@@ -68,6 +68,13 @@ if(BUILD_TESTING)
     set_target_properties(runtime_test PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/fixtures")
     add_test(NAME managed_runtime COMMAND runtime_test)
 
+    add_executable(cursor_bridge_test tests/cursor_bridge_test.mm src/Runtime.mm src/InputState.cpp src/NativeCode.cpp)
+    configure_catalyst(cursor_bridge_test)
+    target_include_directories(cursor_bridge_test PRIVATE src)
+    target_link_libraries(cursor_bridge_test PRIVATE mock_unity)
+    set_target_properties(cursor_bridge_test PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/fixtures")
+    add_test(NAME cursor_bridge COMMAND cursor_bridge_test)
+
     add_executable(native_input_test tests/native_input_test.mm src/NativeInput.mm src/Runtime.mm src/InputState.cpp src/NativeCode.cpp)
     configure_catalyst(native_input_test)
     target_include_directories(native_input_test PRIVATE src)

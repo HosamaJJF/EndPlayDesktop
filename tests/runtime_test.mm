@@ -15,6 +15,8 @@ bool EPDTestBackground();
 void EPDTestFailEnable(bool);
 bool EPDTestKeyDown(int);
 void EPDTestMouse(MouseState*);
+void EPDTestSetVmReady(bool);
+uint32_t EPDTestDomainQueries();
 }
 
 static MouseState ReadMouse()
@@ -33,6 +35,14 @@ int main()
 {
     @autoreleasepool {
         EPDTestReset();
+        EPDTestSetVmReady(false);
+        {
+            Runtime waiting;
+            waiting.tick();
+            Require(!waiting.ready() && EPDTestDomainQueries() == 0,
+                    "startup must not call domain_get before Unity attaches the VM main thread");
+        }
+        EPDTestSetVmReady(true);
         bool foreground = true;
         Runtime runtime([&] { return foreground; });
         runtime.tick();

@@ -63,6 +63,16 @@ The MaaEnd CLI polls asynchronous task status to handle Ctrl-C. Both Agents are 
 
 Since 0.1.6, automated mouse movement declares `relative_delta_mode=win32_scaled_single_frame`: Windows displacement is converted using the resolution ratios in MaaEnd's `MapNavigator/navi_config.h`. Legacy increments can be read repeatedly within one frame but do not persist into the next. Unread menu increments expire, and absolute position or button updates do not overwrite pending increments. Physical input retains its existing path and sensitivity. The current client's horizontal axis measured about 0.25° per unit. The vertical axis has a nonlinear response. For zipline `RelativeMove`, the MaaEnd controller uses the read-only camera API added in 0.1.7 for feedback without changing physical mouse sensitivity in the plugin. Camera-setting changes still require validation.
 
+### Game cursor synchronization
+
+Game requests through `Mouse.WarpCursorPosition` are handled at Unity's device-command boundary, only for the EndPlayDesktop mouse's `WARP` command. Coordinates update both Input System and Legacy Input. Later button, scroll, and session-cleanup events retain the new position; other devices and commands use the original backend. This does not move the host pointer or require an automation session.
+
+`Cursor.visible` and `Cursor.lockState` are stored independently. Locked mode centers the game pointer and restores the center on the next frame after a temporary warp. None preserves the requested position, while Confined bounds it to the render area. The host pointer is captured only while foreground and explicitly Locked; hiding it alone does not request locking.
+
+The `status` fields `cursor_sync_mode=unity_commands_and_lock`, `cursor_visible`, `cursor_lock_state`, `game_cursor_warps`, and `game_cursor_lock_changes` identify the loaded behavior and game requests. Regression coverage exercises actual icall-cache hooks, position synchronization across pages, lock transitions, command forwarding, and background warps without a session. Upstream tasks and recognition resources are unchanged.
+
+Initialization waits until Unity attaches its main thread to the IL2CPP VM before reading managed AppDomain state, avoiding native crashes during early stages such as window-restoration prompts. On 2026-10-29, real-game checks passed startup, opening and closing settings in the background, and recentering after closing the world menu. The user also completed the full essence-farming task test and confirmed it passed.
+
 ### Scroll units and consumption
 
 The scroll boundary uses Windows units, with 120 units per tick. Physical input converts wheel ticks to these units; automation's `scroll` command supplies them directly. Input System receives 120 per tick, Legacy `mouseScrollDelta` receives 1, and both `MouseAxis3` and `Mouse ScrollWheel` names through `GetAxis` / `GetAxisRaw` receive 0.1.
