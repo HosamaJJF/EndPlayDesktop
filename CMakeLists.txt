@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EndPlayDesktop VERSION 0.0.2 LANGUAGES CXX OBJCXX)
+project(EndPlayDesktop VERSION 0.0.4 LANGUAGES CXX OBJCXX)
 
 if(NOT APPLE)
     message(FATAL_ERROR "EndPlayDesktop requires macOS and the Xcode SDK")

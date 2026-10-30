@@ -21,6 +21,8 @@ import json5
 ROOT = Path(__file__).resolve().parents[2]
 CONTROLLER = "EndPlayDesktop"
 EXCLUDED = ("LaunchGamePC", "CloseGamePC")
+LIFECYCLE_TASKS = Path("tasks/EndPlayDesktop.json")
+LIFECYCLE_PIPELINE = Path("resource_endplaydesktop/pipeline/lifecycle.json")
 RECEIPT = Path("Contents/Resources/EndPlayDesktop/receipt.json")
 DEFAULT_APP = Path("/Applications/MaaEnd.app")
 
@@ -140,6 +142,7 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
     controller = {
         "name": CONTROLLER, "type": CONTROLLER, "display_short_side": 720,
         "endplaydesktop": {"python": str(python), "project_dir": str(runtime)},
+        "attach_resource_path": ["./resource_endplaydesktop"],
     }
     changes = {}
     filters = 0
@@ -147,6 +150,9 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
         updated = copy.deepcopy(original)
         filters += update_filters(updated, windows)
         if path == interface_path:
+            imports = updated.setdefault("import", [])
+            if LIFECYCLE_TASKS.as_posix() not in imports:
+                imports.append(LIFECYCLE_TASKS.as_posix())
             existing = [c for c in updated["controller"] if c["name"] == CONTROLLER]
             if len(existing) > 1:
                 raise ValueError("Duplicate EndPlayDesktop controller definitions")
@@ -159,6 +165,38 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
                 updated["controller"].insert(index, controller)
         if updated != original:
             changes[path.relative_to(directory)] = updated
+    additions = {
+        LIFECYCLE_TASKS: {
+            "pretask": {
+                "name": "LaunchGameEndPlayDesktop", "label": "启动游戏 (EndPlayDesktop)",
+                "controller": [CONTROLLER], "exec": "/usr/bin/env",
+                "args": [f"PYTHONPATH={runtime}", "PYTHONDONTWRITEBYTECODE=1", str(python),
+                         "-m", "tools.EndPlayDesktop", "launch-game", "--gui-log"],
+                "option": ["EndPlayDesktopAppPath", "EndPlayDesktopLaunchDelay"],
+            },
+            "task": [{
+                "name": "CloseGameEndPlayDesktop", "label": "关闭游戏 (EndPlayDesktop)",
+                "entry": "EndPlayDesktopCloseGame", "controller": [CONTROLLER], "group": ["other_menu"],
+            }],
+            "option": {"EndPlayDesktopAppPath": {
+                "type": "input", "label": "游戏应用路径（留空自动查找）",
+                "inputs": [{"name": "Path", "label": "PlayCover 终末地 .app", "default": ""}],
+            }, "EndPlayDesktopLaunchDelay": {
+                "type": "input", "label": "启动后等待（秒）",
+                "inputs": [{"name": "Seconds", "label": "秒", "default": "10"}],
+            }},
+        },
+        LIFECYCLE_PIPELINE: {
+            "EndPlayDesktopCloseGame": {
+                "recognition": "DirectHit", "action": "StopApp", "package": "com.hypergryph.endfield",
+                "post_wait_freezes": 0, "next": [],
+            },
+        },
+    }
+    for relative, value in additions.items():
+        path = contained(directory, relative)
+        if not path.is_file() or read_json(path) != value:
+            changes[relative] = value
     return changes, filters
 
 
@@ -238,7 +276,22 @@ def sign_app(app: Path, resources: list[Path]) -> None:
     # Upstream treats JSON below Contents/MacOS as nested signed objects.
     # Refresh only edited JSON signatures; keep every existing library and
     # C++ Agent byte-for-byte intact rather than re-signing all nested code.
-    for path in resources:
+    # MaaFramework creates configuration and debug records at runtime without the
+    # nested signatures macOS requires below Contents/MacOS. Refresh only their
+    # metadata, preserving contents and never re-signing Mach-O binaries.
+    resources = list(resources)
+    macho = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+             b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
+    for folder in ("config", "debug"):
+        generated = app / "Contents/MacOS" / folder
+        if generated.is_symlink():
+            raise ValueError(f"Cannot sign external runtime directory: {folder}")
+        for path in generated.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                with path.open("rb") as stream:
+                    if stream.read(4) not in macho:
+                        resources.append(path)
+    for path in dict.fromkeys(resources):
         result = subprocess.run(["codesign", "--force", "--sign", "-", str(path)],
                                 capture_output=True, text=True)
         if result.returncode:

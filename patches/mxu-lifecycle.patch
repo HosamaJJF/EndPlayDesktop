@@ -1,0 +1,56 @@
+diff --git a/src/components/Toolbar.tsx b/src/components/Toolbar.tsx
+--- a/src/components/Toolbar.tsx
++++ b/src/components/Toolbar.tsx
+@@ -1183,6 +1183,18 @@
+         }
+ 
+         if (runnableTasks.length === 0) {
++          if (
++            controller.type === 'EndPlayDesktop' &&
++            enabledPretasks.some(({ item }) => item.name === 'LaunchGameEndPlayDesktop') &&
++            compatibleTasks.every((task) => isPretaskName(task.taskName))
++          ) {
++            updateInstance(targetId, { isRunning: false });
++            setInstanceTaskStatus(targetId, 'Succeeded');
++            setInstanceCurrentTaskId(targetId, null);
++            clearScheduleExecution(targetId);
++            onPhaseChange?.('idle');
++            return true;
++          }
+           return failStart(t('taskList.autoConnect.noRunnableTasks'));
+         }
+ 
+diff --git a/src-tauri/src/commands/system.rs b/src-tauri/src/commands/system.rs
+--- a/src-tauri/src/commands/system.rs
++++ b/src-tauri/src/commands/system.rs
+@@ -652,6 +652,11 @@
+         "run_pretask: instance_id={}, program={}, args={:?}, cwd={:?}",
+         instance_id, program, args, cwd
+     );
++    let endplaydesktop_launch = program == "/usr/bin/env"
++        && args
++            .windows(3)
++            .any(|part| part == ["-m", "tools.EndPlayDesktop", "launch-game"]);
++
+ 
+     // Windows 下相对可执行路径会相对“父进程当前目录”解析，而非下方设置的 `current_dir`，
+     // 因此必须先基于 cwd 把相对 exec（如 `agent/go-service`）拼成绝对路径，复用 Agent
+@@ -755,9 +760,16 @@
+                 "run_pretask wait cancelled by stop request: {}",
+                 instance_id
+             );
+-            std::thread::spawn(move || {
++            if endplaydesktop_launch {
++                // Only stop our bounded readiness waiter; Launch Services owns
++                // the game process, which remains available for manual play.
++                let _ = child.kill();
+                 let _ = child.wait();
+-            });
++            } else {
++                std::thread::spawn(move || {
++                    let _ = child.wait();
++                });
++            }
+             return Err("MXU_PRE_ACTION_CANCELLED".to_string());
+         }
+ 

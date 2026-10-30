@@ -26,7 +26,7 @@
 4. 完全退出 MaaEnd，打开 `.dmg` 中的 `EndPlayDesktopPatch.app`，选择已安装的 `MaaEnd.app`，点击“应用补丁”。
 5. 重新打开 MaaEnd，选择 **EndPlayDesktop** 控制器，填写游戏的 MaaTools 地址并连接。
 
-补丁保留 MaaEnd 原有功能，为除开启、关闭游戏以外的 Windows 任务添加兼容标记；兼容标记不代表所有任务均已实测。补丁保留目标包自己的 Go/C++ Agent、MaaFramework 与业务资源。MaaEnd 常规更新后，使用同一工具重新应用补丁即可，无需为每个版本重新构建 Agent。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
+补丁保留 MaaEnd 原有功能，为 Windows 任务添加兼容标记，并提供 EndPlayDesktop 专用的启动游戏预任务与关闭游戏任务；兼容标记不代表所有任务均已实测。补丁保留目标包自己的 Go/C++ Agent、MaaFramework 与业务资源。MaaEnd 常规更新后，使用同一工具重新应用补丁即可，无需为每个版本重新构建 Agent。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
 
 ## 自行构建
 

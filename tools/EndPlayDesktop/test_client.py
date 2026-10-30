@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from .client import BridgeClient, BridgeError, Endpoint, MAX_MESSAGE
 
@@ -28,6 +28,24 @@ class ClientTests(unittest.TestCase):
         self.path.chmod(0o644)
         with self.assertRaises(BridgeError):
             Endpoint.read(self.path)
+
+    def test_connect_waits_for_previous_probe_to_release_ownership(self) -> None:
+        client = BridgeClient(self.path)
+        self.addCleanup(client.close)
+        with patch("tools.EndPlayDesktop.client.socket.create_connection", side_effect=[Mock(), Mock()]), \
+                patch.object(client, "request", side_effect=[BridgeError("another client owns the connection"), {"ready": True}]), \
+                patch("tools.EndPlayDesktop.client.time.sleep") as wait:
+            self.assertTrue(client.connect()["ready"])
+        wait.assert_called_once_with(0.05)
+
+    def test_connect_does_not_retry_authentication_errors(self) -> None:
+        client = BridgeClient(self.path)
+        with patch("tools.EndPlayDesktop.client.socket.create_connection", return_value=Mock()) as connect, \
+                patch.object(client, "request", side_effect=BridgeError("authentication or protocol mismatch")):
+            with self.assertRaisesRegex(BridgeError, "authentication"):
+                client.connect()
+        connect.assert_called_once()
+        self.assertFalse(client.connected)
 
     def test_descriptor_cannot_select_remote_host(self) -> None:
         value = json.loads(self.path.read_text())

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from .client import BridgeError
+from .client import BUNDLE_ID, BridgeError
 from .controller import EndPlayDesktopController, EndPlayDesktopDevice
 
 
@@ -94,6 +94,53 @@ class ControllerTests(unittest.TestCase):
         with self.assertLogs("tools.EndPlayDesktop.controller", level="ERROR"):
             self.assertFalse(controller.key_up(87))
         controller.bridge.request.assert_called_with("end")
+
+    def test_stop_releases_input_before_term_and_cleans_up_for_reconnect(self) -> None:
+        controller = self.controller()
+        controller.bridge.pid = 123
+        app = Mock()
+        app.isTerminated.return_value = False
+        calls = Mock()
+        calls.attach_mock(controller.bridge.request, "request")
+        calls.attach_mock(controller.capture.terminate, "terminate")
+        with patch("tools.EndPlayDesktop.lifecycle.game_process", return_value=app), \
+                patch("tools.EndPlayDesktop.lifecycle.wait_for_exit") as wait:
+            self.assertTrue(controller.stop_app(BUNDLE_ID))
+        self.assertEqual(calls.mock_calls[0].args, ("end",))
+        self.assertEqual(calls.mock_calls[1], unittest.mock.call.terminate())
+        wait.assert_called_once_with(app, timeout=3)
+        controller.bridge.close.assert_called()
+        controller.capture.close.assert_called()
+        self.assertEqual(controller._geometry, (0, 0))
+        self.assertFalse(controller._session_active)
+        self.assertTrue(controller.connect(start_session=False))
+
+    def test_stop_rejects_other_apps_and_does_not_claim_success_on_exit_timeout(self) -> None:
+        controller = self.controller()
+        with self.assertLogs("tools.EndPlayDesktop.controller", level="ERROR"):
+            self.assertFalse(controller.stop_app("com.hypergryph.arknights"))
+        controller.capture.terminate.assert_not_called()
+        app = Mock()
+        app.isTerminated.return_value = False
+        with patch("tools.EndPlayDesktop.lifecycle.game_process", return_value=app), \
+                patch("tools.EndPlayDesktop.lifecycle.terminate_process"), \
+                patch("tools.EndPlayDesktop.lifecycle.wait_for_exit", side_effect=BridgeError("exit timeout")), \
+                self.assertLogs("tools.EndPlayDesktop.controller", level="ERROR"):
+            self.assertFalse(controller.stop_app(BUNDLE_ID))
+        controller.bridge.close.assert_called()
+
+    def test_stop_falls_back_only_after_term_was_sent_and_confirms_exit(self) -> None:
+        controller = self.controller()
+        app = Mock()
+        app.isTerminated.return_value = False
+        with patch("tools.EndPlayDesktop.lifecycle.game_process", return_value=app), \
+                patch("tools.EndPlayDesktop.lifecycle.wait_for_exit", side_effect=[BridgeError("timeout"), None]) as wait, \
+                patch("tools.EndPlayDesktop.lifecycle.terminate_process") as terminate, \
+                self.assertLogs("tools.EndPlayDesktop.controller", level="WARNING"):
+            self.assertTrue(controller.stop_app(BUNDLE_ID))
+        controller.capture.terminate.assert_called_once()
+        terminate.assert_called_once_with(app)
+        self.assertEqual(wait.call_count, 2)
 
 
 if __name__ == "__main__":

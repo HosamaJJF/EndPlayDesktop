@@ -2,7 +2,7 @@
 
 [English](./one-click.en.md)
 
-下载并解压 `EndPlayDesktop-0.0.3-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
+下载并解压 `EndPlayDesktop-0.0.4-macos-arm64.zip`，或打开同名 DMG。面向 Apple Silicon Mac，工具内置所需运行环境和现成补丁，无需安装 Python、uv、Go 或 Rust。
 
 ## 应用补丁
 
@@ -10,11 +10,21 @@
 2. 双击 `EndPlayDesktopPatch.app`。
 3. 默认选择 `/Applications/MaaEnd.app`；安装在其他位置时，点击“选择 MaaEnd…”指定应用。
 4. 点击“应用补丁”，等待完成提示。
-5. 打开原 MaaEnd，选择 EndPlayDesktop 控制器，填写游戏实际 MaaTools 地址并连接。
+5. 打开原 MaaEnd，选择 EndPlayDesktop 控制器，填写游戏实际 MaaTools 地址并点击连接提交。新配置默认显示 `127.0.0.1:1717`，与原生 PlayCover 一致；已有保存地址保留。
 
-应用名称、MaaEnd 版本号、官方更新源和原任务逻辑保持原样。Windows 任务追加兼容标记，开启和关闭游戏任务除外。目标包自己的 Go/C++ Agent、MaaFramework 与业务资源会保留。MaaEnd 常规更新后使用同一工具重新应用即可，无需按版本重编 Agent；上游协议或框架 ABI 大改时仍可能需要更新补丁。
+应用名称、MaaEnd 版本号、官方更新源和原任务逻辑保持原样。Windows 任务追加兼容标记；启动与关闭游戏使用补丁提供的专用任务。目标包自己的 Go/C++ Agent、MaaFramework 与业务资源会保留。MaaEnd 常规更新后使用同一工具重新应用即可，无需按版本重编 Agent；上游协议或框架 ABI 大改时仍可能需要更新补丁。
 
 0.0.2 及更早工具替换过 Go Agent。迁移时会从同版本原包备份恢复；备份已删除时，需先重新安装一次当前官方 MaaEnd，再应用本工具。任务配置无需删除。
+
+工具会替换整个 MXU 可执行文件，当前基于 MXU v2.8.0 构建。MaaEnd 携带新版 MXU 时，应先迁移补丁并重新构建验证，旧补丁不会自动保留新版 MXU 的功能与修复。
+
+## 启动与关闭游戏
+
+在 EndPlayDesktop 控制器下添加“启动游戏 (EndPlayDesktop)”和“关闭游戏 (EndPlayDesktop)”。启动是连接控制器前执行的预任务，不受任务列表排序影响；关闭应放在业务任务之后。只运行启动任务也会沿用正常连接流程，需要已保存的设备地址。
+
+游戏路径留空时自动使用当前用户 PlayCover 容器中的 `com.hypergryph.endfield.app`；安装在其他位置时填写完整 `.app` 路径。启动预任务只打开或复用游戏进程，然后等待“启动后等待（秒）”指定的间隔，默认 10 秒，可设为 0 至 300 秒。它不读取连接地址，不检查插件、MaaTools 或截图，也不释放或重建控制器连接。等待不足时可延长间隔；是否连接成功由随后 MXU 的正常连接阶段判断。登录与进入游戏仍由原有任务处理。
+
+地址提交、默认输入值、自动重连、有效连接复用及旧连接清理沿用原生 PlayCover 的规则。仅编辑输入框不会提交地址；没有已保存地址时，开始任务会提示设备配置不足，不再自动补用 1718。取消启动会结束启动等待子进程，已打开的游戏保留。关闭任务仍先释放输入，再通过 MaaTools 请求退出；退出等待超时后校验进程身份并发送 SIGTERM，确认进程退出。
 
 ## 游戏插件
 

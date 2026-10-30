@@ -12,7 +12,7 @@ CAPTURE_TIMEOUT = 15.0
 
 
 class MaaToolsCapture:
-    """只使用 MaaTools 的截图协议，所有网络读写都有超时，不转发触摸。"""
+    """使用 MaaTools 截图及退出协议，所有网络读写都有超时，不转发触摸。"""
 
     def __init__(self, address: str) -> None:
         host, separator, port = address.rpartition(":")
@@ -84,6 +84,18 @@ class MaaToolsCapture:
         except Exception:
             self.close()
             raise
+
+    def terminate(self) -> None:
+        # Recheck the bundle on a fresh connection before sending a command that
+        # exits the process. TERM has no response; process observation confirms exit.
+        try:
+            self.connect()
+            self._command(b"TERM")
+        except Exception:
+            self.close()
+            raise
+        # Keep the channel alive until the caller observes exit. Closing it here
+        # can cancel MaaTools' asynchronous command handler before TERM runs.
 
     def close(self) -> None:
         if self._socket is not None:

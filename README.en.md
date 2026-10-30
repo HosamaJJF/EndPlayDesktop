@@ -26,7 +26,7 @@ Install the community PlayCover fork above, Endfield, and MaaEnd first, then ena
 4. Quit MaaEnd completely. Open `EndPlayDesktopPatch.app` from the `.dmg`, select your installed `MaaEnd.app`, and click “应用补丁” (Apply Patch).
 5. Reopen MaaEnd, choose the **EndPlayDesktop** controller, enter the game's MaaTools address, and connect.
 
-The patch preserves MaaEnd's existing features and marks Windows tasks as compatible except game launch and close. Compatibility labels do not mean every task has been tested. The target app keeps its own Go/C++ Agents, MaaFramework, and business resources. Reapply the same tool after ordinary MaaEnd updates without rebuilding Agents for each release. Keep the game window neither minimized nor hidden; it can run in the background without taking over the keyboard or mouse.
+The patch preserves MaaEnd's existing features, marks Windows tasks as compatible, and adds dedicated EndPlayDesktop game-launch and game-close tasks. Compatibility labels do not mean every task has been tested. The target app keeps its own Go/C++ Agents, MaaFramework, and business resources. Reapply the same tool after ordinary MaaEnd updates without rebuilding Agents for each release. Keep the game window neither minimized nor hidden; it can run in the background without taking over the keyboard or mouse.
 
 ## Build from source
 

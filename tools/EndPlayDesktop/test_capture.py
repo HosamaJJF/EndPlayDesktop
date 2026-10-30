@@ -75,6 +75,28 @@ class CaptureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MaaToolsCapture("192.0.2.1:1717")
 
+    def test_terminate_rechecks_identity_and_sends_term_without_waiting_for_a_reply(self) -> None:
+        client, server = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(server.close)
+        bundle = b"com.hypergryph.endfield"
+        server.sendall(b"OKAY" + struct.pack("!II", 4, len(bundle)) + bundle + struct.pack("!HH", 2, 1))
+        capture = MaaToolsCapture("127.0.0.1:1717")
+        with patch("tools.EndPlayDesktop.capture.socket.create_connection", return_value=client):
+            capture.terminate()
+        self.assertEqual(server.recv(1024), b"MAA\0\0\4VERN\0\4BNDL\0\4SIZE\0\4TERM")
+        self.assertIs(capture._socket, client)
+        capture.close()
+        self.assertIsNone(capture._socket)
+
+    def test_terminate_never_sends_term_to_another_bundle(self) -> None:
+        capture, sock = self.fake_server(b"com.hypergryph.arknights")
+        with patch("tools.EndPlayDesktop.capture.socket.create_connection", return_value=sock), \
+                patch.object(capture, "_command", wraps=capture._command) as command:
+            with self.assertRaisesRegex(BridgeError, "不是终末地"):
+                capture.terminate()
+        self.assertNotIn(unittest.mock.call(b"TERM"), command.call_args_list)
+
     def test_empty_frame_reports_capture_failure_and_closes(self) -> None:
         capture, sock = self.fake_server(empty_frame=True)
         with patch("tools.EndPlayDesktop.capture.socket.create_connection", return_value=sock):

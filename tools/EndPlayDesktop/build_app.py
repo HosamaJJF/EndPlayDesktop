@@ -40,7 +40,7 @@ def smoke_runtime(app: Path) -> None:
     result = subprocess.run([str(executable), "--runtime-check"], cwd="/tmp", env=env,
                             capture_output=True, text=True, check=True, timeout=30)
     report = json.loads(result.stdout)
-    if not report.get("frozen") or not report.get("sidecar_import"):
+    if not report.get("frozen") or not report.get("sidecar_import") or not report.get("lifecycle_import"):
         raise ValueError("Frozen runtime check failed")
     print("Frozen runtime:", json.dumps(report))
     requests = [{"op": "connected", "args": []}, {"op": "close", "args": []}]
@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime = assets / "runtime_source/tools/EndPlayDesktop"
     runtime.mkdir(parents=True)
     (runtime.parent / "__init__.py").write_text("")
-    for name in ("__init__.py", "__main__.py", "cli.py", "client.py", "capture.py", "controller.py", "pitch.py", "sidecar.py"):
+    for name in ("__init__.py", "__main__.py", "cli.py", "client.py", "capture.py", "controller.py", "pitch.py", "sidecar.py", "lifecycle.py", "log_output.py"):
         shutil.copy2(ROOT / "tools/EndPlayDesktop" / name, runtime / name)
     with zipfile.ZipFile(assets / "payloads.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in ("mxu", "manifest.json"):

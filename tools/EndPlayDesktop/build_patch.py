@@ -11,6 +11,10 @@ from pathlib import Path
 from .patch import ROOT, app_info, digest, read_json, write_json
 
 
+# Previously distributed driver, accepted only for an exact, unedited upgrade.
+LEGACY_DRIVERS = {"1c1ac24960a4e41dd213f04f01a894c6a405b27b56ba7c0604cdc11a3bc332d6"}
+
+
 def run(*args: str, cwd: Path, env: dict[str, str] | None = None) -> None:
     subprocess.run(args, cwd=cwd, env=env, check=True)
 
@@ -19,10 +23,13 @@ def commit(source: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
 
 
+def source_patch_applied(source: Path, patch: Path) -> bool:
+    return subprocess.run(["git", "apply", "--reverse", "--check", str(patch)], cwd=source,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
 def apply_source_patch(source: Path, patch: Path) -> None:
-    applied = subprocess.run(["git", "apply", "--reverse", "--check", str(patch)], cwd=source,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    if not applied:
+    if not source_patch_applied(source, patch):
         run("git", "apply", "--check", str(patch), cwd=source)
         run("git", "apply", "--intent-to-add", str(patch), cwd=source)
 
@@ -34,10 +41,15 @@ def prepare_mxu(source: Path, versions: dict) -> None:
         run("git", "clone", "--branch", pin["tag"], "--depth", "1", pin["repository"], str(source), cwd=ROOT)
     native = source / "src-tauri/src/commands/endplaydesktop.rs"
     expected = ROOT / "patches/mxu/controller.rs"
-    if native.exists() and native.read_bytes() != expected.read_bytes():
+    if native.exists() and native.read_bytes() != expected.read_bytes() and digest(native) not in LEGACY_DRIVERS:
         raise ValueError("MXU driver has local edits; preserve them and update the repository patch first")
-    apply_source_patch(source, ROOT / "patches/mxu.patch")
-    if not native.exists():
+    lifecycle = ROOT / "patches/mxu-lifecycle.patch"
+    # The lifecycle layer extends imports created by the base patch, so its
+    # presence makes a reverse check of the base patch alone inconclusive.
+    if not source_patch_applied(source, lifecycle):
+        apply_source_patch(source, ROOT / "patches/mxu.patch")
+    apply_source_patch(source, lifecycle)
+    if not native.exists() or native.read_bytes() != expected.read_bytes():
         shutil.copy2(expected, native)
 
 

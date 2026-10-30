@@ -52,6 +52,14 @@ class SidecarTests(unittest.TestCase):
             dispatch(device, {"op": "key_down", "args": [True]})
         device.key_down.assert_not_called()
 
+    def test_stop_app_only_targets_endfield(self) -> None:
+        device = Mock()
+        device.stop_app.return_value = True
+        self.assertEqual(dispatch(device, {"op": "stop_app"}), (True, b""))
+        device.stop_app.assert_called_once_with("com.hypergryph.endfield")
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            dispatch(device, {"op": "stop_app", "args": ["other.app"]})
+
     def test_invalid_frame_releases_device(self) -> None:
         device = Mock()
         with self.assertRaises(ValueError):

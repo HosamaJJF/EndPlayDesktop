@@ -5,12 +5,14 @@ import contextlib
 import json
 import logging
 import os
+import plistlib
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from .client import BridgeClient, BridgeError, find_endpoint
+from .log_output import configure_logging
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="读取插件状态，不建立自动化输入会话")
     commands.add_parser("sidecar", help="为适配版 MXU 提供私有控制器通道")
+    launch = commands.add_parser("launch-game", help="打开 PlayCover 终末地并等待固定间隔")
+    launch.add_argument("options", nargs="?", default="{}", help="MXU 预任务选项 JSON")
+    launch.add_argument("--timeout", type=float, default=90)
+    launch.add_argument("--delay", type=float, help="启动后等待秒数，覆盖预任务选项（默认 10 秒）")
+    launch.add_argument("--gui-log", action="store_true", help=argparse.SUPPRESS)
     probe = commands.add_parser("probe", help="检查自动化会话内的 Unity 输入更新，不发送按键或鼠标移动")
     probe.add_argument("--seconds", type=float, default=5)
     screenshot = commands.add_parser("screenshot", help="检查组合控制器并保存截图")
@@ -112,8 +119,26 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("entry")
     run.add_argument("--override", type=Path, help="可选 Pipeline override JSON")
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    configure_logging(gui=args.command == "launch-game" and args.gui_log)
     try:
+        if args.command == "launch-game":
+            from .lifecycle import launch_game
+
+            options = json.loads(args.options)
+            if not isinstance(options, dict):
+                raise ValueError("启动配置格式无效")
+            app_path = options.get("EndPlayDesktopAppPath", {})
+            if not isinstance(app_path, dict) or not isinstance(app_path.get("Path", ""), str):
+                raise ValueError("游戏路径选项无效")
+            delay_option = options.get("EndPlayDesktopLaunchDelay", {})
+            if not isinstance(delay_option, dict):
+                raise ValueError("启动等待选项无效")
+            raw_delay = delay_option.get("Seconds", "10")
+            if isinstance(raw_delay, bool) or not isinstance(raw_delay, (str, int, float)):
+                raise ValueError("启动等待秒数无效")
+            delay = args.delay if args.delay is not None else float(raw_delay)
+            launch_game(app_path.get("Path", ""), delay=delay, timeout=args.timeout)
+            return 0
         endpoint = args.endpoint or find_endpoint()
         if args.command == "sidecar":
             from .controller import EndPlayDesktopDevice
@@ -179,6 +204,6 @@ def main(argv: list[str] | None = None) -> int:
             controller.close()
     except KeyboardInterrupt:
         return 130
-    except (BridgeError, OSError, ValueError, RuntimeError, ImportError) as exc:
+    except (BridgeError, OSError, ValueError, RuntimeError, ImportError, plistlib.InvalidFileException) as exc:
         logging.error("%s", exc)
         return 1

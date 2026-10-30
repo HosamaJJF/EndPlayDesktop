@@ -8,7 +8,7 @@ from typing import Callable
 import numpy as np
 from maa.controller import CustomController
 
-from .client import BridgeClient, BridgeError
+from .client import BUNDLE_ID, BridgeClient, BridgeError
 from .capture import MaaToolsCapture
 from .pitch import PitchFeedback
 
@@ -159,7 +159,29 @@ class EndPlayDesktopDevice:
         return False
 
     def stop_app(self, intent: str) -> bool:
-        return False
+        if intent != BUNDLE_ID:
+            logger.error("仅支持关闭终末地")
+            return False
+        try:
+            from .lifecycle import game_process, terminate_process, wait_for_exit
+
+            app = game_process(self.bridge.pid)
+            if app is not None and not app.isTerminated():
+                self.end_session()
+                self.bridge.close()
+                self.capture.terminate()
+                try:
+                    wait_for_exit(app, timeout=3)
+                except BridgeError:
+                    logger.warning("游戏未退出，正在重试关闭")
+                    terminate_process(app)
+                    wait_for_exit(app, timeout=5)
+            return True
+        except (BridgeError, OSError, ValueError, RuntimeError, ImportError) as exc:
+            logger.error("关闭游戏失败：%s", exc)
+            return False
+        finally:
+            self.close()
 
     def inactive(self) -> bool:
         try:
@@ -177,6 +199,8 @@ class EndPlayDesktopDevice:
             except (BridgeError, OSError):
                 pass
         self._session_active = False
+        self._geometry = (0, 0)
+        self._pitch = PitchFeedback()
         self.bridge.close()
         self.capture.close()
 

@@ -24,6 +24,7 @@ class BridgeError(RuntimeError):
 class Endpoint:
     port: int
     token: str = field(repr=False)
+    pid: int | None = None
 
     @classmethod
     def read(cls, path: Path) -> Endpoint:
@@ -45,7 +46,10 @@ class Endpoint:
             raise BridgeError("连接描述文件端口无效")
         if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
             raise BridgeError("连接描述文件令牌无效")
-        return cls(port=port, token=token)
+        pid = value.get("pid")
+        if pid is not None and (type(pid) is not int or pid <= 0):
+            raise BridgeError("连接描述文件进程标识无效")
+        return cls(port=port, token=token, pid=pid)
 
 
 def find_endpoint() -> Path:
@@ -74,6 +78,7 @@ class BridgeClient:
         self._stop = threading.Event()
         self._heartbeat: threading.Thread | None = None
         self.last_error: str | None = None
+        self.pid: int | None = None
         self._deadline = 0.0
 
     @property
@@ -83,15 +88,26 @@ class BridgeClient:
     def connect(self) -> dict[str, Any]:
         if self._socket is not None:
             raise BridgeError("连接已建立")
-        endpoint = Endpoint.read(self._endpoint)
-        self._stop.clear()
-        self.last_error = None
-        try:
-            self._socket = socket.create_connection(("127.0.0.1", endpoint.port), timeout=2.5)
-            result = self.request("hello", protocol=1, token=endpoint.token)
-        except Exception:
-            self.close()
-            raise
+        deadline = time.monotonic() + 2.5
+        while True:
+            endpoint = Endpoint.read(self._endpoint)
+            self.pid = endpoint.pid
+            self._stop.clear()
+            self.last_error = None
+            try:
+                self._socket = socket.create_connection(("127.0.0.1", endpoint.port), timeout=2.5)
+                result = self.request("hello", protocol=1, token=endpoint.token)
+                break
+            except BridgeError as exc:
+                self.close()
+                # Disconnect releases ownership on Unity's next main-queue turn.
+                # Wait only for that explicit state, never retry game input.
+                if str(exc) != "another client owns the connection" or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+            except Exception:
+                self.close()
+                raise
         self._heartbeat = threading.Thread(target=self._keep_alive, name="EndPlayDesktop-heartbeat", daemon=True)
         self._heartbeat.start()
         return result
@@ -170,6 +186,7 @@ class BridgeClient:
 
     def close(self) -> None:
         self._stop.set()
+        self.pid = None
         with self._lock:
             if self._socket is not None:
                 try:

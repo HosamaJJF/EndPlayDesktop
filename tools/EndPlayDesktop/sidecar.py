@@ -9,7 +9,7 @@ from typing import BinaryIO
 
 from PIL import Image
 
-from .client import BridgeError
+from .client import BUNDLE_ID, BridgeError
 from .controller import EndPlayDesktopDevice
 
 
@@ -50,6 +50,8 @@ def dispatch(device: EndPlayDesktopDevice, request: dict) -> tuple[object, bytes
         return device.connected(), b""
     if op == "inactive":
         return device.inactive(), b""
+    if op == "stop_app":
+        return device.stop_app(BUNDLE_ID), b""
     if op == "screencap":
         image = device.screencap()
         if image.size == 0:

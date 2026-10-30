@@ -7,7 +7,32 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from .cli import run_task
+from .cli import main, run_task
+
+
+class LaunchCommandTests(unittest.TestCase):
+    def test_launch_does_not_require_an_endpoint_before_opening_game(self) -> None:
+        with patch("tools.EndPlayDesktop.lifecycle.launch_game") as launch, \
+                patch("tools.EndPlayDesktop.cli.find_endpoint", side_effect=AssertionError("too early")):
+            options = json.dumps({"EndPlayDesktopAppPath": {"Path": "/Games/Endfield.app"}})
+            self.assertEqual(main(["launch-game", options]), 0)
+        launch.assert_called_once_with("/Games/Endfield.app", delay=10, timeout=90)
+
+
+    def test_task_delay_and_cli_override_do_not_pass_an_address(self) -> None:
+        options = json.dumps({"EndPlayDesktopLaunchDelay": {"Seconds": "12.5"}})
+        with patch("tools.EndPlayDesktop.lifecycle.launch_game") as launch:
+            self.assertEqual(main(["launch-game", options]), 0)
+            launch.assert_called_once_with("", delay=12.5, timeout=90)
+            launch.reset_mock()
+            self.assertEqual(main(["launch-game", options, "--delay", "0"]), 0)
+            launch.assert_called_once_with("", delay=0, timeout=90)
+
+    def test_invalid_delay_option_is_rejected(self) -> None:
+        with patch("tools.EndPlayDesktop.lifecycle.launch_game") as launch:
+            for value in ([], {"Seconds": []}, {"Seconds": True}, {"Seconds": "abc"}):
+                self.assertEqual(main(["launch-game", json.dumps({"EndPlayDesktopLaunchDelay": value})]), 1)
+            launch.assert_not_called()
 
 
 class RunnerTests(unittest.TestCase):

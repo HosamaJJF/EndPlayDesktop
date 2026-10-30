@@ -184,6 +184,9 @@ impl CustomControllerCallback for Callback {
         ControllerFeature::USE_MOUSE_DOWN_UP_INSTEAD_OF_CLICK
             | ControllerFeature::USE_KEY_DOWN_UP_INSTEAD_OF_CLICK
     }
+    fn stop_app(&self, intent: &str) -> bool {
+        intent == "com.hypergryph.endfield" && self.action("stop_app", &[])
+    }
     fn screencap(&self) -> Option<Vec<u8>> {
         self.request("screencap", &[])
             .and_then(|(result, payload)| {

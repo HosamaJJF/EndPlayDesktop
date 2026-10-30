@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .build_patch import prepare_mxu
-from .patch import (CONTROLLER, RECEIPT, app_info, apply_patch, digest, load_payload,
+from .patch import (CONTROLLER, LIFECYCLE_TASKS, LIFECYCLE_PIPELINE, RECEIPT, app_info, apply_patch, digest, load_payload, sign_app,
                     read_json, resource_changes, restore, write_json)
 
 
@@ -87,6 +87,7 @@ class AppPatchTests(unittest.TestCase):
         new = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
         self.assertEqual(new["endplaydesktop"]["python"], str(self.runtime / ".venv/bin/python"))
         preserved = {**interface, "controller": [c for c in interface["controller"] if c["name"] != CONTROLLER]}
+        preserved["import"] = [item for item in preserved["import"] if item != LIFECYCLE_TASKS.as_posix()]
         self.assertEqual(preserved, self.interface)
         self.assertEqual(app_info(self.app)[0], self.info)
 
@@ -101,6 +102,17 @@ class AppPatchTests(unittest.TestCase):
         controller = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
         self.assertEqual(controller["endplaydesktop"]["python"], str(executable))
 
+    def test_unchanged_legacy_driver_upgrades_after_both_source_patches_apply(self) -> None:
+        source = self.root / "MXU"
+        driver = source / "src-tauri/src/commands/endplaydesktop.rs"
+        driver.parent.mkdir(parents=True)
+        driver.write_bytes(b"known previous driver")
+        with patch("tools.EndPlayDesktop.build_patch.LEGACY_DRIVERS", {digest(driver)}), \
+                patch("tools.EndPlayDesktop.build_patch.apply_source_patch") as apply:
+            prepare_mxu(source, {"mxu": {}})
+        self.assertEqual(apply.call_count, 2)
+        self.assertIn(b"fn stop_app", driver.read_bytes())
+
     def test_windows_tasks_and_options_expand_but_launch_and_close_are_excluded(self) -> None:
         changes, count = resource_changes(self.directory, self.runtime)
         tasks = changes[Path("tasks/normal.json")]
@@ -114,6 +126,21 @@ class AppPatchTests(unittest.TestCase):
         self.assertNotIn(CONTROLLER, close["option"]["CloseGamePCSetting"]["controller"])
         self.assertNotIn(CONTROLLER, changes[Path("tasks/start.json")]["pretask"]["controller"])
         self.assertEqual(count, 6)
+
+    def test_lifecycle_is_isolated_and_launch_works_with_spaces_without_a_shell(self) -> None:
+        changes, _ = resource_changes(self.directory, self.runtime)
+        tasks = changes[LIFECYCLE_TASKS]
+        launch = tasks["pretask"]
+        self.assertEqual(launch["controller"], [CONTROLLER])
+        self.assertEqual(launch["exec"], "/usr/bin/env")
+        self.assertEqual(launch["option"], ["EndPlayDesktopAppPath", "EndPlayDesktopLaunchDelay"])
+        self.assertEqual(tasks["option"]["EndPlayDesktopLaunchDelay"]["inputs"][0]["default"], "10")
+        self.assertNotIn("--wait-maatools", launch["args"])
+        self.assertEqual(launch["args"][-4:], ["-m", "tools.EndPlayDesktop", "launch-game", "--gui-log"])
+        self.assertEqual(tasks["task"][0]["controller"], [CONTROLLER])
+        self.assertEqual(changes[LIFECYCLE_PIPELINE]["EndPlayDesktopCloseGame"]["action"], "StopApp")
+        controller = next(c for c in changes[Path("interface.json")]["controller"] if c["name"] == CONTROLLER)
+        self.assertEqual(controller["attach_resource_path"], ["./resource_endplaydesktop"])
 
     def test_apply_is_repeatable_and_restore_recovers_exact_original_files(self) -> None:
         original = self.snapshot()
@@ -139,6 +166,24 @@ class AppPatchTests(unittest.TestCase):
             apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(self.snapshot(), original)
         self.assertEqual(len(list(self.backups.iterdir())), 1)
+
+    def test_generated_records_are_sealed_without_resigning_executables(self) -> None:
+        config = self.directory / "config/maa_option.json"
+        record = self.directory / "debug/record/random_salt.txt"
+        executable = self.directory / "debug/native-helper"
+        for path, data in [(config, b"{}"), (record, b"test salt"), (executable, b"\xcf\xfa\xed\xfe" + b"native code")]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        before = self.snapshot()
+        with patch("tools.EndPlayDesktop.patch.subprocess.run") as run:
+            run.return_value.returncode = 0
+            sign_app(self.app, [])
+        signed = [call.args[0][-1] for call in run.call_args_list]
+        self.assertIn(str(config), signed)
+        self.assertIn(str(record), signed)
+        self.assertNotIn(str(executable), signed)
+        self.assertNotIn(str(self.directory / "agent/go-service"), signed)
+        self.assertEqual(self.snapshot(), before)
 
     def test_rejects_unknown_payload_format_and_corrupt_payload_before_mutation(self) -> None:
         original = self.snapshot()
