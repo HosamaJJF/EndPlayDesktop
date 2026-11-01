@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .build_patch import prepare_mxu
-from .patch import (CONTROLLER, LIFECYCLE_TASKS, LIFECYCLE_PIPELINE, RECEIPT, app_info, apply_patch, digest, load_payload, sign_app,
+from .patch import (CONTROLLER, LEGACY_LIFECYCLE_TASKS, LEGACY_LIFECYCLE_PIPELINE, RECEIPT, app_info, apply_patch, digest, load_payload, sign_app,
                     read_json, resource_changes, restore, write_json)
 
 
@@ -30,7 +30,8 @@ class AppPatchTests(unittest.TestCase):
             "controller": [{"name": "Win32-Front", "type": "Win32"},
                            {"name": "AnotherWindows", "type": "Win32"},
                            {"name": "PlayCover", "type": "PlayCover"}],
-            "import": ["tasks/normal.json", "tasks/CloseGamePC.json", "tasks/start.json"],
+            "import": ["tasks/normal.json", "tasks/CloseGamePC.json", "tasks/start.json",
+                       "tasks/pretasks/LaunchGamePlayCover.json", "tasks/CloseGamePlayCover.json"],
         }
         self.tasks = {
             "task": [
@@ -50,6 +51,29 @@ class AppPatchTests(unittest.TestCase):
         write_json(self.directory / "tasks/start.json", {
             "pretask": {"name": "LaunchGamePC", "controller": ["Win32-Front", CONTROLLER]},
         })
+        self.playcover_launch = {
+            "pretask": {
+                "name": "LaunchGamePlayCover", "label": "$pretask.LaunchGamePlayCover.label",
+                "controller": ["PlayCover"], "exec": "agent/go-service",
+                "args": ["--pretask", "LaunchGamePlayCover"],
+                "option": ["LaunchGamePlayCoverAppPath", "LaunchGamePlayCoverLaunchDelay"],
+            },
+            "option": {
+                "LaunchGamePlayCoverAppPath": {
+                    "type": "input", "inputs": [{"name": "Path", "default": ""}],
+                },
+                "LaunchGamePlayCoverLaunchDelay": {
+                    "type": "input", "inputs": [{"name": "Seconds", "default": "10", "verify": "[0-9]+"}],
+                },
+            },
+        }
+        self.playcover_close = {
+            "task": [{"name": "CloseGamePlayCover", "entry": "CloseGamePlayCover",
+                      "label": "$task.CloseGamePlayCover.label", "controller": ["PlayCover"],
+                      "group": ["other_menu"]}],
+        }
+        write_json(self.directory / "tasks/pretasks/LaunchGamePlayCover.json", self.playcover_launch)
+        write_json(self.directory / "tasks/CloseGamePlayCover.json", self.playcover_close)
         (self.directory / "MaaEnd").write_bytes(b"original client")
         (self.directory / "agent").mkdir()
         (self.directory / "agent/go-service").write_bytes(b"original agent")
@@ -87,7 +111,6 @@ class AppPatchTests(unittest.TestCase):
         new = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
         self.assertEqual(new["endplaydesktop"]["python"], str(self.runtime / ".venv/bin/python"))
         preserved = {**interface, "controller": [c for c in interface["controller"] if c["name"] != CONTROLLER]}
-        preserved["import"] = [item for item in preserved["import"] if item != LIFECYCLE_TASKS.as_posix()]
         self.assertEqual(preserved, self.interface)
         self.assertEqual(app_info(self.app)[0], self.info)
 
@@ -102,16 +125,31 @@ class AppPatchTests(unittest.TestCase):
         controller = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
         self.assertEqual(controller["endplaydesktop"]["python"], str(executable))
 
-    def test_unchanged_legacy_driver_upgrades_after_both_source_patches_apply(self) -> None:
+    def test_unchanged_legacy_driver_upgrades_with_only_the_controller_patch(self) -> None:
         source = self.root / "MXU"
         driver = source / "src-tauri/src/commands/endplaydesktop.rs"
         driver.parent.mkdir(parents=True)
         driver.write_bytes(b"known previous driver")
         with patch("tools.EndPlayDesktop.build_patch.LEGACY_DRIVERS", {digest(driver)}), \
+                patch("tools.EndPlayDesktop.build_patch.source_patch_applied", return_value=False), \
                 patch("tools.EndPlayDesktop.build_patch.apply_source_patch") as apply:
             prepare_mxu(source, {"mxu": {}})
-        self.assertEqual(apply.call_count, 2)
+        apply.assert_called_once_with(source, Path(__file__).resolve().parents[2] / "patches/mxu.patch")
         self.assertIn(b"fn stop_app", driver.read_bytes())
+
+    def test_old_mxu_lifecycle_patch_is_reversed_before_preparing_controller(self) -> None:
+        source = self.root / "MXU"
+        driver = source / "src-tauri/src/commands/endplaydesktop.rs"
+        driver.parent.mkdir(parents=True)
+        expected = Path(__file__).resolve().parents[2] / "patches/mxu/controller.rs"
+        shutil.copy2(expected, driver)
+        with patch("tools.EndPlayDesktop.build_patch.source_patch_applied", return_value=True), \
+                patch("tools.EndPlayDesktop.build_patch.run") as run, \
+                patch("tools.EndPlayDesktop.build_patch.apply_source_patch") as apply:
+            prepare_mxu(source, {"mxu": {}})
+        run.assert_called_once_with("git", "apply", "--reverse",
+                                    str(expected.parents[1] / "legacy/mxu-lifecycle.patch"), cwd=source)
+        apply.assert_called_once_with(source, expected.parents[1] / "mxu.patch")
 
     def test_windows_tasks_and_options_expand_but_launch_and_close_are_excluded(self) -> None:
         changes, count = resource_changes(self.directory, self.runtime)
@@ -125,22 +163,73 @@ class AppPatchTests(unittest.TestCase):
         self.assertNotIn(CONTROLLER, close["task"][0]["controller"])
         self.assertNotIn(CONTROLLER, close["option"]["CloseGamePCSetting"]["controller"])
         self.assertNotIn(CONTROLLER, changes[Path("tasks/start.json")]["pretask"]["controller"])
-        self.assertEqual(count, 6)
+        self.assertEqual(count, 8)
 
-    def test_lifecycle_is_isolated_and_launch_works_with_spaces_without_a_shell(self) -> None:
+    def test_reuses_upstream_playcover_lifecycle_without_adding_tasks_or_resources(self) -> None:
         changes, _ = resource_changes(self.directory, self.runtime)
-        tasks = changes[LIFECYCLE_TASKS]
-        launch = tasks["pretask"]
-        self.assertEqual(launch["controller"], [CONTROLLER])
-        self.assertEqual(launch["exec"], "/usr/bin/env")
-        self.assertEqual(launch["option"], ["EndPlayDesktopAppPath", "EndPlayDesktopLaunchDelay"])
-        self.assertEqual(tasks["option"]["EndPlayDesktopLaunchDelay"]["inputs"][0]["default"], "10")
-        self.assertNotIn("--wait-maatools", launch["args"])
-        self.assertEqual(launch["args"][-4:], ["-m", "tools.EndPlayDesktop", "launch-game", "--gui-log"])
-        self.assertEqual(tasks["task"][0]["controller"], [CONTROLLER])
-        self.assertEqual(changes[LIFECYCLE_PIPELINE]["EndPlayDesktopCloseGame"]["action"], "StopApp")
+        launch = changes[Path("tasks/pretasks/LaunchGamePlayCover.json")]
+        close = changes[Path("tasks/CloseGamePlayCover.json")]
+        self.assertEqual(launch["pretask"]["controller"], ["PlayCover", CONTROLLER])
+        self.assertEqual(close["task"][0]["controller"], ["PlayCover", CONTROLLER])
+        launch["pretask"]["controller"].remove(CONTROLLER)
+        close["task"][0]["controller"].remove(CONTROLLER)
+        self.assertEqual(launch, self.playcover_launch)
+        self.assertEqual(close, self.playcover_close)
+        self.assertTrue(all((self.directory / path).is_file() for path in changes))
+        self.assertNotIn(LEGACY_LIFECYCLE_TASKS, changes)
+        self.assertNotIn(LEGACY_LIFECYCLE_PIPELINE, changes)
         controller = next(c for c in changes[Path("interface.json")]["controller"] if c["name"] == CONTROLLER)
-        self.assertEqual(controller["attach_resource_path"], ["./resource_endplaydesktop"])
+        self.assertNotIn("attach_resource_path", controller)
+
+    def test_playcover_lifecycle_uses_declared_controller_names_and_expands_option_filters(self) -> None:
+        self.interface["controller"][-1]["name"] = "RenamedPlayCover"
+        write_json(self.directory / "interface.json", self.interface)
+        self.playcover_launch["pretask"]["controller"] = ["RenamedPlayCover"]
+        option = self.playcover_launch["option"]["LaunchGamePlayCoverAppPath"]
+        option["controller"] = ["RenamedPlayCover"]
+        option["cases"] = [{"name": "Default", "controller": ["RenamedPlayCover"]}]
+        write_json(self.directory / "tasks/pretasks/LaunchGamePlayCover.json", self.playcover_launch)
+        self.playcover_close["task"][0]["controller"] = ["RenamedPlayCover"]
+        write_json(self.directory / "tasks/CloseGamePlayCover.json", self.playcover_close)
+        changes, _ = resource_changes(self.directory, self.runtime)
+        launch = changes[Path("tasks/pretasks/LaunchGamePlayCover.json")]
+        self.assertEqual(launch["pretask"]["controller"], ["RenamedPlayCover", CONTROLLER])
+        option = launch["option"]["LaunchGamePlayCoverAppPath"]
+        self.assertEqual(option["controller"], ["RenamedPlayCover", CONTROLLER])
+        self.assertEqual(option["cases"][0]["controller"], ["RenamedPlayCover", CONTROLLER])
+        self.assertEqual(changes[Path("tasks/CloseGamePlayCover.json")]["task"][0]["controller"],
+                         ["RenamedPlayCover", CONTROLLER])
+
+    def test_reapplying_removes_legacy_lifecycle_and_restore_recovers_it(self) -> None:
+        self.interface["import"].append(LEGACY_LIFECYCLE_TASKS.as_posix())
+        self.interface["controller"].append({
+            "name": CONTROLLER, "type": CONTROLLER,
+            "attach_resource_path": ["./resource_endplaydesktop"],
+        })
+        write_json(self.directory / "interface.json", self.interface)
+        write_json(self.directory / LEGACY_LIFECYCLE_TASKS, {
+            "pretask": {"name": "LaunchGameEndPlayDesktop", "controller": [CONTROLLER]},
+            "task": [{"name": "CloseGameEndPlayDesktop", "controller": [CONTROLLER]}],
+        })
+        write_json(self.directory / LEGACY_LIFECYCLE_PIPELINE, {"EndPlayDesktopCloseGame": {"action": "StopApp"}})
+        original = self.snapshot()
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(result["status"], "applied")
+        interface = read_json(self.directory / "interface.json")
+        self.assertNotIn(LEGACY_LIFECYCLE_TASKS.as_posix(), interface["import"])
+        self.assertFalse((self.directory / LEGACY_LIFECYCLE_TASKS).exists())
+        self.assertFalse((self.directory / LEGACY_LIFECYCLE_PIPELINE).exists())
+        controller = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
+        self.assertNotIn("attach_resource_path", controller)
+        signed = {path.relative_to(self.sign.call_args.args[0] / "Contents/MacOS")
+                  for path in self.sign.call_args.args[1]}
+        self.assertNotIn(LEGACY_LIFECYCLE_TASKS, signed)
+        self.assertNotIn(LEGACY_LIFECYCLE_PIPELINE, signed)
+        self.assertIn(CONTROLLER, read_json(self.directory / "tasks/pretasks/LaunchGamePlayCover.json")["pretask"]["controller"])
+        self.assertIn(CONTROLLER, read_json(self.directory / "tasks/CloseGamePlayCover.json")["task"][0]["controller"])
+        self.assertEqual(apply_patch(self.app, self.payload, self.runtime, self.backups)["status"], "already_applied")
+        restore(self.app, Path(result["backup"]))
+        self.assertEqual(self.snapshot(), original)
 
     def test_apply_is_repeatable_and_restore_recovers_exact_original_files(self) -> None:
         original = self.snapshot()

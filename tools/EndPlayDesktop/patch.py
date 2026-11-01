@@ -21,8 +21,9 @@ import json5
 ROOT = Path(__file__).resolve().parents[2]
 CONTROLLER = "EndPlayDesktop"
 EXCLUDED = ("LaunchGamePC", "CloseGamePC")
-LIFECYCLE_TASKS = Path("tasks/EndPlayDesktop.json")
-LIFECYCLE_PIPELINE = Path("resource_endplaydesktop/pipeline/lifecycle.json")
+PLAYCOVER_LIFECYCLE = ("LaunchGamePlayCover", "CloseGamePlayCover")
+LEGACY_LIFECYCLE_TASKS = Path("tasks/EndPlayDesktop.json")
+LEGACY_LIFECYCLE_PIPELINE = Path("resource_endplaydesktop/pipeline/lifecycle.json")
 RECEIPT = Path("Contents/Resources/EndPlayDesktop/receipt.json")
 DEFAULT_APP = Path("/Applications/MaaEnd.app")
 
@@ -105,29 +106,33 @@ def documents(directory: Path) -> dict[Path, dict]:
     return found
 
 
-def update_filters(value: object, windows: set[str], blocked: bool = False) -> int:
+def update_filters(value: object, windows: set[str], playcover: set[str],
+                   blocked: bool = False, lifecycle: bool = False) -> int:
     changed = 0
     if isinstance(value, dict):
         blocked = blocked or any(value.get(key) in EXCLUDED for key in ("name", "entry"))
+        lifecycle = lifecycle or any(value.get(key) in PLAYCOVER_LIFECYCLE for key in ("name", "entry"))
+        supported = windows | playcover if lifecycle else windows
         for key, item in value.items():
             if key == "controller" and isinstance(item, list) and all(isinstance(name, str) for name in item):
                 updated = list(item)
                 if blocked:
                     updated = [name for name in item if name != CONTROLLER]
-                elif windows.intersection(item) and CONTROLLER not in item:
+                elif supported.intersection(item) and CONTROLLER not in item:
                     updated.append(CONTROLLER)
                 if updated != item:
                     value[key] = updated
                     changed += 1
             else:
                 child_blocked = blocked or any(key.startswith(name) for name in EXCLUDED)
-                changed += update_filters(item, windows, child_blocked)
+                child_lifecycle = lifecycle or any(key.startswith(name) for name in PLAYCOVER_LIFECYCLE)
+                changed += update_filters(item, windows, playcover, child_blocked, child_lifecycle)
     elif isinstance(value, list):
-        changed += sum(update_filters(item, windows, blocked) for item in value)
+        changed += sum(update_filters(item, windows, playcover, blocked, lifecycle) for item in value)
     return changed
 
 
-def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None = None) -> tuple[dict[Path, dict], int]:
+def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None = None) -> tuple[dict[Path, dict | None], int]:
     directory = directory.resolve()
     runtime = runtime.resolve()
     python = runtime_python.absolute() if runtime_python else runtime / ".venv/bin/python"
@@ -137,22 +142,24 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
     interface_path = directory / "interface.json"
     interface = source[interface_path]
     windows = {c["name"] for c in interface["controller"] if c.get("type") == "Win32"}
+    playcover = {c["name"] for c in interface["controller"] if c.get("type") == "PlayCover"}
     if not windows:
         raise ValueError("No Windows controller definitions found; review this MaaEnd version")
     controller = {
         "name": CONTROLLER, "type": CONTROLLER, "display_short_side": 720,
         "endplaydesktop": {"python": str(python), "project_dir": str(runtime)},
-        "attach_resource_path": ["./resource_endplaydesktop"],
     }
     changes = {}
     filters = 0
     for path, original in source.items():
+        if path.relative_to(directory) == LEGACY_LIFECYCLE_TASKS:
+            continue
         updated = copy.deepcopy(original)
-        filters += update_filters(updated, windows)
+        filters += update_filters(updated, windows, playcover)
         if path == interface_path:
-            imports = updated.setdefault("import", [])
-            if LIFECYCLE_TASKS.as_posix() not in imports:
-                imports.append(LIFECYCLE_TASKS.as_posix())
+            if "import" in updated:
+                updated["import"] = [item for item in updated["import"]
+                                     if item != LEGACY_LIFECYCLE_TASKS.as_posix()]
             existing = [c for c in updated["controller"] if c["name"] == CONTROLLER]
             if len(existing) > 1:
                 raise ValueError("Duplicate EndPlayDesktop controller definitions")
@@ -165,38 +172,11 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
                 updated["controller"].insert(index, controller)
         if updated != original:
             changes[path.relative_to(directory)] = updated
-    additions = {
-        LIFECYCLE_TASKS: {
-            "pretask": {
-                "name": "LaunchGameEndPlayDesktop", "label": "启动游戏 (EndPlayDesktop)",
-                "controller": [CONTROLLER], "exec": "/usr/bin/env",
-                "args": [f"PYTHONPATH={runtime}", "PYTHONDONTWRITEBYTECODE=1", str(python),
-                         "-m", "tools.EndPlayDesktop", "launch-game", "--gui-log"],
-                "option": ["EndPlayDesktopAppPath", "EndPlayDesktopLaunchDelay"],
-            },
-            "task": [{
-                "name": "CloseGameEndPlayDesktop", "label": "关闭游戏 (EndPlayDesktop)",
-                "entry": "EndPlayDesktopCloseGame", "controller": [CONTROLLER], "group": ["other_menu"],
-            }],
-            "option": {"EndPlayDesktopAppPath": {
-                "type": "input", "label": "游戏应用路径（留空自动查找）",
-                "inputs": [{"name": "Path", "label": "PlayCover 终末地 .app", "default": ""}],
-            }, "EndPlayDesktopLaunchDelay": {
-                "type": "input", "label": "启动后等待（秒）",
-                "inputs": [{"name": "Seconds", "label": "秒", "default": "10"}],
-            }},
-        },
-        LIFECYCLE_PIPELINE: {
-            "EndPlayDesktopCloseGame": {
-                "recognition": "DirectHit", "action": "StopApp", "package": "com.hypergryph.endfield",
-                "post_wait_freezes": 0, "next": [],
-            },
-        },
-    }
-    for relative, value in additions.items():
-        path = contained(directory, relative)
-        if not path.is_file() or read_json(path) != value:
-            changes[relative] = value
+    # Remove only the two files generated by older patches. Upstream now owns
+    # the lifecycle definitions and the base resource already contains StopApp.
+    for relative in (LEGACY_LIFECYCLE_TASKS, LEGACY_LIFECYCLE_PIPELINE):
+        if contained(directory, relative).is_file():
+            changes[relative] = None
     return changes, filters
 
 
@@ -337,7 +317,10 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
         copy_app(app, staged)
         target = staged / "Contents/MacOS"
         for relative, value in changes.items():
-            write_json(target / relative, value)
+            if value is None:
+                contained(target, relative).unlink()
+            else:
+                write_json(target / relative, value)
         destination = target / info["CFBundleExecutable"]
         shutil.copy2(contained(payload, manifest["files"]["mxu"]["path"]), destination)
         destination.chmod(0o755)
@@ -347,7 +330,7 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
             "format": 2, "payload_id": payload_id, "maaend_version": version,
             "backup": str(backup), "runtime": str(runtime),
         })
-        sign_app(staged, [target / relative for relative in changes])
+        sign_app(staged, [target / relative for relative, value in changes.items() if value is not None])
         swap_app(app, staged)
     return {"status": "applied", "version": version, "changed_resource_files": len(changes),
             "changed_controller_filters": filters, "backup": str(backup), "recovered_agent": agent is not None}

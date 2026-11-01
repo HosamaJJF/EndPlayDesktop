@@ -43,12 +43,12 @@ def prepare_mxu(source: Path, versions: dict) -> None:
     expected = ROOT / "patches/mxu/controller.rs"
     if native.exists() and native.read_bytes() != expected.read_bytes() and digest(native) not in LEGACY_DRIVERS:
         raise ValueError("MXU driver has local edits; preserve them and update the repository patch first")
-    lifecycle = ROOT / "patches/mxu-lifecycle.patch"
-    # The lifecycle layer extends imports created by the base patch, so its
-    # presence makes a reverse check of the base patch alone inconclusive.
-    if not source_patch_applied(source, lifecycle):
-        apply_source_patch(source, ROOT / "patches/mxu.patch")
-    apply_source_patch(source, lifecycle)
+    # Older checkouts may still contain special handling for our retired tasks.
+    # Keep the old diff only to reverse it; new builds use upstream pretasks.
+    legacy = ROOT / "patches/legacy/mxu-lifecycle.patch"
+    if source_patch_applied(source, legacy):
+        run("git", "apply", "--reverse", str(legacy), cwd=source)
+    apply_source_patch(source, ROOT / "patches/mxu.patch")
     if not native.exists() or native.read_bytes() != expected.read_bytes():
         shutil.copy2(expected, native)
 
