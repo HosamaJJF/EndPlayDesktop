@@ -2,6 +2,20 @@
 
 [中文](./validation.md)
 
+## 2026-11-01: 0.0.5 test-package build
+
+- Set project, CMake, and lockfile versions to `0.0.5`; update the one-click instructions and release notes.
+- A separate MXU v2.8.0 checkout passed TypeScript checking, Vite, and Rust release builds without the old lifecycle exceptions. The patch build references MaaEnd `v3.0.0-beta.1`.
+- All 80 Python tests, 9 CTest cases, and 4 controller frontend tests passed. The rebuilt plugin passed arm64 and signature checks, and the uv lockfile check passed.
+- The distribution includes current sources and the plugin; in-game plugin behavior remains as in 0.0.4. No game tasks are executed in this round; package validation uses temporary copies.
+
+## 2026-11-01: reuse upstream PlayCover launch and close tasks
+
+- Stop generating dedicated EndPlayDesktop tasks and the close Pipeline. Add controller compatibility entries to upstream `LaunchGamePlayCover`, `CloseGamePlayCover`, and their options. Reapplying removes the old generated task file, import, and attached resource.
+- All 80 Python tests passed, covering upstream option preservation, controller-name discovery, legacy cleanup, repeat application, and exact restoration.
+- Read-only planning against the installed MaaEnd `v3.0.0-beta.1`, followed by a temporary resource-copy check, found 5 changed files and 2 added controller filters. Upstream fields were preserved apart from compatibility entries, EndPlayDesktop controller configuration, and legacy cleanup. Repeat planning produced no changes. The installed app was not modified.
+- A temporary MXU v2.8.0 source copy passed initial preparation, repeat preparation, and removal of the old lifecycle patch. No distribution rebuild or game tasks were run in this round.
+
 ## 2026-10-30: fixed startup delay and native PlayCover connection behavior
 
 - The launch pretask only opens or reuses the game through the OS and waits for a configurable 0–300 seconds, defaulting to 10. It does not read an address, probe the plugin or MaaTools, destroy an existing controller, or force reconnection. The input defaults to port 1717; saved addresses are retained. Missing saved configuration follows the native configuration-required error, without a 1718 fallback. Cancellation cleanup and launch-only completion handling remain.
