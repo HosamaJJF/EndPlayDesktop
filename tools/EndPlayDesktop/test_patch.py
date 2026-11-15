@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .build_patch import prepare_mxu
-from .patch import (CONTROLLER, LEGACY_LIFECYCLE_TASKS, LEGACY_LIFECYCLE_PIPELINE, RECEIPT, app_info, apply_patch, digest, load_payload, sign_app,
+from .patch import (MXUReplacementRequired, CONTROLLER, LEGACY_LIFECYCLE_TASKS, LEGACY_LIFECYCLE_PIPELINE, RECEIPT, app_info, apply_patch, digest, load_payload, sign_app,
                     read_json, resource_changes, restore, write_json)
 
 
@@ -93,6 +93,7 @@ class AppPatchTests(unittest.TestCase):
             (self.payload / name).write_bytes(b"patched " + name.encode())
         self.manifest = {
             "format": 2, "tested_maaend_version": "v2.33.0", "architecture": "arm64",
+            "mxu_version": "2.8.0", "mxu_commit": "test-mxu-build",
             "files": {"mxu": {"path": "mxu", "sha256": digest(self.payload / "mxu")}},
         }
         write_json(self.payload / "manifest.json", self.manifest)
@@ -102,8 +103,37 @@ class AppPatchTests(unittest.TestCase):
         stack.enter_context(patch("tools.EndPlayDesktop.patch.verify_original"))
         self.sign = stack.enter_context(patch("tools.EndPlayDesktop.patch.sign_app"))
 
+    def apply_patch(self, *args, **kwargs):
+        return apply_patch(*args, **kwargs, replace_mxu=True)
+
     def snapshot(self) -> dict[str, bytes]:
         return {str(p.relative_to(self.app)): p.read_bytes() for p in self.app.rglob("*") if p.is_file()}
+
+    def test_mxu_replacement_requires_explicit_consent_before_mutation(self) -> None:
+        original = self.snapshot()
+        with self.assertRaises(MXUReplacementRequired) as raised:
+            apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(raised.exception.app, self.app)
+        self.assertEqual(raised.exception.mxu_version, "2.8.0")
+        self.assertIn("--replace-mxu", str(raised.exception))
+        self.assertEqual(self.snapshot(), original)
+        self.assertFalse(self.backups.exists())
+        self.sign.assert_not_called()
+        result = apply_patch(self.app, self.payload, self.runtime, self.backups, replace_mxu=True)
+        self.assertEqual(result["status"], "applied")
+        receipt = read_json(self.app / RECEIPT)
+        self.assertEqual(receipt["mxu_version"], "2.8.0")
+        self.assertEqual(receipt["mxu_commit"], "test-mxu-build")
+        self.assertEqual(apply_patch(self.app, self.payload, self.runtime, self.backups)["status"], "already_applied")
+
+    def test_upstream_mxu_update_requires_consent_again_even_with_old_receipt(self) -> None:
+        self.apply_patch(self.app, self.payload, self.runtime, self.backups)
+        (self.directory / "MaaEnd").write_bytes(b"new upstream MXU")
+        original = self.snapshot()
+        with self.assertRaises(MXUReplacementRequired):
+            apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.assertEqual(self.snapshot(), original)
+        self.assertEqual(len(list(self.backups.iterdir())), 1)
 
     def test_registers_one_controller_preserving_branding_and_existing_definitions(self) -> None:
         changes, _ = resource_changes(self.directory, self.runtime)
@@ -119,7 +149,7 @@ class AppPatchTests(unittest.TestCase):
         executable = self.root / "Managed Runtime/EndPlayDesktopRuntime"
         executable.parent.mkdir()
         executable.write_bytes(b"frozen runtime")
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups, executable)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups, executable)
         self.assertEqual(result["status"], "applied")
         interface = read_json(self.directory / "interface.json")
         controller = next(c for c in interface["controller"] if c["name"] == CONTROLLER)
@@ -213,7 +243,7 @@ class AppPatchTests(unittest.TestCase):
         })
         write_json(self.directory / LEGACY_LIFECYCLE_PIPELINE, {"EndPlayDesktopCloseGame": {"action": "StopApp"}})
         original = self.snapshot()
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         interface = read_json(self.directory / "interface.json")
         self.assertNotIn(LEGACY_LIFECYCLE_TASKS.as_posix(), interface["import"])
@@ -227,13 +257,13 @@ class AppPatchTests(unittest.TestCase):
         self.assertNotIn(LEGACY_LIFECYCLE_PIPELINE, signed)
         self.assertIn(CONTROLLER, read_json(self.directory / "tasks/pretasks/LaunchGamePlayCover.json")["pretask"]["controller"])
         self.assertIn(CONTROLLER, read_json(self.directory / "tasks/CloseGamePlayCover.json")["task"][0]["controller"])
-        self.assertEqual(apply_patch(self.app, self.payload, self.runtime, self.backups)["status"], "already_applied")
+        self.assertEqual(self.apply_patch(self.app, self.payload, self.runtime, self.backups)["status"], "already_applied")
         restore(self.app, Path(result["backup"]))
         self.assertEqual(self.snapshot(), original)
 
     def test_apply_is_repeatable_and_restore_recovers_exact_original_files(self) -> None:
         original = self.snapshot()
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual((self.directory / "MaaEnd").read_bytes(), b"patched mxu")
         self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"original agent")
@@ -242,7 +272,7 @@ class AppPatchTests(unittest.TestCase):
         self.assertEqual((self.directory / "resource/untouched").read_bytes(), b"original resource")
         self.assertEqual(app_info(self.app)[0], self.info)
         self.assertTrue((self.app / RECEIPT).is_file())
-        repeated = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        repeated = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(repeated["status"], "already_applied")
         self.assertEqual(len(list(self.backups.iterdir())), 1)
         restore(self.app, Path(result["backup"]))
@@ -252,7 +282,7 @@ class AppPatchTests(unittest.TestCase):
         original = self.snapshot()
         self.sign.side_effect = OSError("signing failed")
         with self.assertRaisesRegex(OSError, "signing failed"):
-            apply_patch(self.app, self.payload, self.runtime, self.backups)
+            self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(self.snapshot(), original)
         self.assertEqual(len(list(self.backups.iterdir())), 1)
 
@@ -279,7 +309,7 @@ class AppPatchTests(unittest.TestCase):
         self.manifest["format"] = 999
         write_json(self.payload / "manifest.json", self.manifest)
         with self.assertRaisesRegex(ValueError, "format"):
-            apply_patch(self.app, self.payload, self.runtime, self.backups)
+            self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.manifest["format"] = 2
         write_json(self.payload / "manifest.json", self.manifest)
         (self.payload / "mxu").write_bytes(b"corrupted")
@@ -312,7 +342,7 @@ class AppPatchTests(unittest.TestCase):
         write_json(self.directory / "interface.json", self.interface)
         (self.directory / "MaaEnd").write_bytes(b"future upstream client")
         (self.directory / "agent/go-service").write_bytes(b"future upstream agent with new operations")
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual(result["version"], "v999.0.0-rc.1")
         self.assertEqual(app_info(self.app)[0], self.info)
@@ -320,7 +350,7 @@ class AppPatchTests(unittest.TestCase):
                          b"future upstream agent with new operations")
 
     def test_reapplying_after_an_upstream_update_keeps_new_agents_and_tasks(self) -> None:
-        apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         # Simulate an updater retaining the receipt while replacing upstream files.
         self.interface["version"] = "v2.36.0-beta.1"
         write_json(self.directory / "interface.json", self.interface)
@@ -330,7 +360,7 @@ class AppPatchTests(unittest.TestCase):
         })
         (self.directory / "MaaEnd").write_bytes(b"new upstream client")
         (self.directory / "agent/go-service").write_bytes(b"new upstream agent")
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"new upstream agent")
         tasks = read_json(self.directory / "tasks/normal.json")
@@ -338,9 +368,9 @@ class AppPatchTests(unittest.TestCase):
         self.assertEqual(tasks["option"]["MinimumPrice"]["operation"], "configure_minimum_price")
 
     def test_reapplies_when_only_the_upstream_client_was_replaced(self) -> None:
-        apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         (self.directory / "MaaEnd").write_bytes(b"updated client with unchanged resources")
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(result["status"], "applied")
         self.assertEqual((self.directory / "MaaEnd").read_bytes(), b"patched mxu")
 
@@ -355,8 +385,8 @@ class AppPatchTests(unittest.TestCase):
             (app / "Contents/MacOS/MaaEnd").write_bytes(executable + b"app signature")
 
         self.sign.side_effect = sign
-        apply_patch(self.app, self.payload, self.runtime, self.backups)
-        repeated = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        self.apply_patch(self.app, self.payload, self.runtime, self.backups)
+        repeated = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertEqual(repeated["status"], "already_applied")
         self.assertEqual(len(list(self.backups.iterdir())), 1)
 
@@ -372,7 +402,7 @@ class AppPatchTests(unittest.TestCase):
 
     def test_legacy_patch_recovers_the_same_release_agent_from_backup(self) -> None:
         self.legacy_install()
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertTrue(result["recovered_agent"])
         self.assertEqual((self.directory / "agent/go-service").read_bytes(), b"original agent")
         self.assertEqual(read_json(self.app / RECEIPT)["format"], 2)
@@ -385,7 +415,7 @@ class AppPatchTests(unittest.TestCase):
         receipt = read_json(self.app / RECEIPT)
         receipt["backup"] = str(intermediate.parent)
         write_json(self.app / RECEIPT, receipt)
-        result = apply_patch(self.app, self.payload, self.runtime, self.backups)
+        result = self.apply_patch(self.app, self.payload, self.runtime, self.backups)
         self.assertTrue(result["recovered_agent"])
         self.assertEqual((self.directory / "agent/go-service").read_bytes(),
                          (donor / "Contents/MacOS/agent/go-service").read_bytes())
@@ -406,7 +436,7 @@ class AppPatchTests(unittest.TestCase):
                     write_json(self.app / RECEIPT, receipt)
                 before = self.snapshot()
                 with self.assertRaisesRegex(ValueError, "官方 MaaEnd"):
-                    apply_patch(self.app, self.payload, self.runtime, self.backups)
+                    self.apply_patch(self.app, self.payload, self.runtime, self.backups)
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse(self.backups.exists())
 
@@ -418,7 +448,7 @@ class AppPatchTests(unittest.TestCase):
                 self.manifest["files"]["go-service"] = {"path": "go-service", "sha256": "unused"}
                 write_json(self.payload / "manifest.json", self.manifest)
                 with self.assertRaises(ValueError):
-                    apply_patch(self.app, self.payload, self.runtime, self.backups)
+                    self.apply_patch(self.app, self.payload, self.runtime, self.backups)
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse(self.backups.exists())
 

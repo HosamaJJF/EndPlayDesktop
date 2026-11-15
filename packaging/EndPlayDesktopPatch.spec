@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 import json
-from PyInstaller.utils.hooks import copy_metadata, collect_dynamic_libs
+from PyInstaller.utils.hooks import copy_metadata
 
 root = Path(SPECPATH).parent
 assets = root / ".cache/app-assets"
@@ -13,6 +13,7 @@ datas = [
     (str(assets / "runtime_source"), "runtime_source"),
     (str(root / "LICENSE"), "licenses"),
     (str(root / "THIRD_PARTY_NOTICES.md"), "licenses"),
+    (str(root / "licenses/MaaFramework-LGPL-3.0.md"), "licenses"),
 ]
 for package in ("numpy", "Pillow", "json5", "maafw", "pyobjc-core", "pyobjc-framework-Cocoa", "pyinstaller"):
     datas += copy_metadata(package)
@@ -20,7 +21,10 @@ for package in ("numpy", "Pillow", "json5", "maafw", "pyobjc-core", "pyobjc-fram
 analysis = Analysis(
     [str(root / "packaging/launcher.py")],
     pathex=[str(root)],
-    binaries=collect_dynamic_libs("maa"),
+    # The sidecar needs only the Python device layer. CLI task execution loads
+    # the target app's own maafw directory; bundling a second full framework is
+    # both unnecessary and expensive for every retained runtime.
+    binaries=[],
     datas=datas,
     hiddenimports=["AppKit", "Foundation", "PyObjCTools.AppHelper"],
     hookspath=[],

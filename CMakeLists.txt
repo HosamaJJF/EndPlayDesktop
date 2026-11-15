@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(EndPlayDesktop VERSION 0.0.5 LANGUAGES CXX OBJCXX)
+project(EndPlayDesktop VERSION 0.0.6 LANGUAGES CXX OBJCXX)
 
 if(NOT APPLE)
     message(FATAL_ERROR "EndPlayDesktop requires macOS and the Xcode SDK")
@@ -30,8 +30,33 @@ add_custom_command(TARGET EndPlayDesktop POST_BUILD
     COMMAND codesign --force --sign - "$<TARGET_FILE:EndPlayDesktop>"
     VERBATIM)
 
+add_library(EndPlayDesktopController SHARED src/controller/Adapter.mm)
+add_executable(EndPlayDesktopLauncher src/controller/Launcher.mm)
+foreach(target EndPlayDesktopController EndPlayDesktopLauncher)
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    target_compile_options(${target} PRIVATE -mmacosx-version-min=14.0 -fobjc-arc -Wall -Wextra -Werror -fvisibility=hidden)
+    target_link_options(${target} PRIVATE -mmacosx-version-min=14.0)
+    target_link_libraries(${target} PRIVATE "-framework Foundation")
+    set_target_properties(${target} PROPERTIES OSX_ARCHITECTURES arm64)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND codesign --force --sign - "$<TARGET_FILE:${target}>" VERBATIM)
+endforeach()
+
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_library(mock_framework SHARED tests/mock_framework.cpp)
+    target_include_directories(mock_framework PRIVATE src/controller)
+    set_target_properties(mock_framework PROPERTIES OUTPUT_NAME MaaFramework
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/controller" OSX_ARCHITECTURES arm64)
+    add_executable(controller_adapter_test tests/controller_adapter_test.cpp)
+    target_link_libraries(controller_adapter_test PRIVATE "-framework CoreFoundation")
+    target_compile_options(controller_adapter_test PRIVATE -UNDEBUG)
+    set_target_properties(controller_adapter_test PROPERTIES OSX_ARCHITECTURES arm64)
+    add_test(NAME external_controller COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/controller_adapter_test.py"
+        "$<TARGET_FILE:EndPlayDesktopLauncher>" "$<TARGET_FILE:EndPlayDesktopController>"
+        "$<TARGET_FILE:controller_adapter_test>" "$<TARGET_FILE:mock_framework>")
+    set_tests_properties(external_controller PROPERTIES TIMEOUT 30)
     add_executable(frame_delta_test tests/frame_delta_test.cpp)
     target_include_directories(frame_delta_test PRIVATE src)
     target_compile_features(frame_delta_test PRIVATE cxx_std_20)

@@ -1,4 +1,4 @@
-"""Build the reusable MXU controller patch; use the target app's own Agents."""
+"""Build an external controller payload; keep legacy MXU build helpers for migration."""
 from __future__ import annotations
 
 import os
@@ -65,7 +65,7 @@ def build_mxu(source: Path, target: Path) -> Path:
     return target / "release/mxu"
 
 
-def build_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
+def build_legacy_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
                   target_dir: Path | None = None) -> dict:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("Build on an Apple Silicon Mac")
@@ -88,6 +88,7 @@ def build_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
             raise ValueError(f"Unexpected executable architecture: mxu ({arch})")
         write_json(payload / "manifest.json", {
             "format": 2, "tested_maaend_version": version,
+            "mxu_version": read_json(mxu_source / "package.json")["version"],
             "mxu_commit": commit(mxu_source), "architecture": "arm64",
             "files": {"mxu": {"path": "mxu", "sha256": digest(payload / "mxu")}},
         })
@@ -97,3 +98,33 @@ def build_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = None,
         payload.rename(destination)
     return {"status": "built", "payload": str(destination), "tested_maaend_version": version,
             "mxu_commit": commit(mxu_source)}
+
+
+def build_payload(app: Path, target_dir: Path | None = None) -> dict:
+    """Build only the launcher and C ABI adapter; never ship a frozen MXU."""
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        raise ValueError("Build on an Apple Silicon Mac")
+    _, _, version = app_info(app)
+    target = (target_dir or ROOT / "build").resolve()
+    run("cmake", "-S", str(ROOT), "-B", str(target), "-G", "Ninja",
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo", cwd=ROOT)
+    run("cmake", "--build", str(target), "--target", "EndPlayDesktopController", "EndPlayDesktopLauncher", cwd=ROOT)
+    cache = ROOT / ".cache/payloads"
+    cache.mkdir(parents=True, exist_ok=True)
+    destination = cache / "desktop"
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=cache) as temporary:
+        payload = Path(temporary) / "desktop"
+        payload.mkdir()
+        files = {}
+        for key, filename in (("controller", "libEndPlayDesktopController.dylib"), ("launcher", "EndPlayDesktopLauncher")):
+            shutil.copy2(target / filename, payload / filename)
+            arch = subprocess.check_output(["lipo", "-archs", str(payload / filename)], text=True).strip()
+            if arch != "arm64":
+                raise ValueError(f"Unexpected architecture: {filename} ({arch})")
+            files[key] = {"path": filename, "sha256": digest(payload / filename)}
+        write_json(payload / "manifest.json", {"format": 3, "architecture": "arm64",
+                   "reference_maaend_version": version, "files": files})
+        if destination.exists():
+            shutil.rmtree(destination)
+        payload.rename(destination)
+    return {"status": "built", "payload": str(destination), "preserves_upstream_mxu": True}

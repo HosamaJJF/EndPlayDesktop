@@ -2,7 +2,7 @@
 
 [中文](./one-click.md)
 
-Download and extract `EndPlayDesktop-0.0.5-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
+Download and extract `EndPlayDesktop-<version>-macos-arm64.zip`, or open the matching DMG. For Apple Silicon Macs, the app includes its runtime and prebuilt patch; Python, uv, Go, and Rust are not required.
 
 ## Apply the patch
 
@@ -16,7 +16,7 @@ The app name, MaaEnd version, official update sources, and existing task logic r
 
 Tools through 0.0.2 replaced Go Agent. Migration restores it from a matching unpatched backup. If that backup is missing, reinstall the current official MaaEnd app once, then apply this tool. Keep the task configuration.
 
-The tool replaces the entire MXU executable, currently built against MXU v2.8.0. If MaaEnd includes a newer MXU, port the patch, rebuild, and validate it first; an old patch does not automatically preserve that MXU version's features and fixes.
+The new tool uses a separate launcher and controller adapter while retaining MaaEnd's upstream MXU executable. Migration from older patches restores MXU from a matching unmodified backup. If no backup is available, reinstall the current official MaaEnd before applying this tool. Select EndPlayDesktop again and submit the actual connection address. Launch the normal `MaaEnd.app`. Incompatible future API, loading, or signing changes may still require an updated adapter.
 
 ## Launching and closing the game
 
@@ -37,6 +37,10 @@ The distribution also includes `libEndPlayDesktop.dylib`. Load it through PlayCo
 Backups, controller runtimes, and logs live under `~/Library/Application Support/EndPlayDesktop/`, without depending on the download or development source directory. After applying, you may quit the tool, move the download, or eject the DMG.
 
 To restore, quit MaaEnd, open the tool, choose the corresponding MaaEnd app, and click “恢复备份” (Restore Backup), then confirm. This restores the state preceding the last patch application. After a MaaEnd update, open the tool and apply the patch again.
+
+Successful apply, restore, and backup deletion operations reclaim unused runtimes and extracted payload caches. “清理闲置运行环境” (Clean Unused Runtimes) triggers the same cleanup manually. Runtimes referenced by known installations or retained backups remain protected. Reapply the patch if manually deleting runtimes has broken the current controller.
+
+“清空备份…” (Clear Backups) asks for confirmation before deleting this tool's backups for all installation paths, then reclaims runtimes used only by those backups. The current app and task configuration remain intact, but deleted restore points cannot be recovered. Migrate v1 installations that still need their original Agent backup first.
 
 ## Source and building
 

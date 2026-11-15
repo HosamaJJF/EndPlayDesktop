@@ -19,7 +19,8 @@ def main() -> int:
         Image.fromarray(np.zeros((2, 3, 3), dtype=np.uint8)).save(data, format="PNG")
         print(json.dumps({"frozen": bool(getattr(sys, "frozen", False)), "python": sys.version.split()[0],
                           "numpy": np.__version__, "png_bytes": len(data.getvalue()),
-                          "sidecar_import": callable(dispatch), "lifecycle_import": callable(launch_game)}))
+                          "sidecar_import": callable(dispatch), "lifecycle_import": callable(launch_game),
+                          "maafw_loaded": "maa" in sys.modules}))
         return 0
     from tools.EndPlayDesktop.gui import main as gui_main
 

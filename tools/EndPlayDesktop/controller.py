@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from maa.controller import CustomController
 
 from .client import BUNDLE_ID, BridgeClient, BridgeError
 from .capture import MaaToolsCapture
@@ -205,13 +204,10 @@ class EndPlayDesktopDevice:
         self.capture.close()
 
 
-class EndPlayDesktopController(EndPlayDesktopDevice, CustomController):
-    """CLI 的原生 CustomController；MXU sidecar 直接复用纯设备层。"""
-
-    def __init__(self, endpoint: Path, maatools_address: str) -> None:
-        EndPlayDesktopDevice.__init__(self, endpoint, maatools_address)
-        CustomController.__init__(self)
-
-    def inactive(self) -> bool:
-        self.close()
-        return True
+def __getattr__(name: str):
+    # Importing the sidecar's device layer must not initialize MaaFramework or
+    # require another complete set of native libraries in every runtime bundle.
+    if name in ("CustomController", "EndPlayDesktopController"):
+        from . import maa_controller
+        return getattr(maa_controller, name)
+    raise AttributeError(name)

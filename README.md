@@ -28,9 +28,13 @@
 
 补丁保留 MaaEnd 原有功能，为 Windows 任务及上游 PlayCover 启动游戏预任务、关闭游戏任务添加 EndPlayDesktop 兼容标记；兼容标记不代表所有任务均已实测。启动与关闭使用 MaaEnd 已有的任务，不再添加专用任务或 Pipeline。补丁保留目标包自己的 Go/C++ Agent、MaaFramework 与业务资源。MaaEnd 常规更新后，使用同一工具重新应用补丁即可，无需为每个版本重新构建 Agent。使用时保持游戏窗口未最小化和隐藏，可以挂在后台不抢占键鼠。
 
+新版通过独立启动器和控制器适配层接入，保留 MaaEnd 自带的 MXU 程序，不再换回固定的旧版 MXU。旧补丁安装会尝试从同版本原包备份恢复 MXU；找不到备份时，请先重新安装官方 MaaEnd，再应用新版，任务配置无需删除。详情见[控制器接入与更新](./docs/controller-adapter.md)。
+
+补丁工具会自动回收闲置 Runtime 与解压缓存，并提供“清空备份…”和“清理闲置运行环境”按钮。当前安装及保留备份引用的 Runtime 会保留；清空备份后会回收随之闲置的版本。
+
 ## 自行构建
 
-需要 Xcode、CMake、Ninja、Git、Node.js 22、pnpm、Rust、tauri 和 uv 环境。在本仓库根目录运行：
+需要 Xcode、CMake、Ninja 和 uv 环境。在本仓库根目录运行：
 
 ```bash
 uv sync --group bundle
@@ -39,8 +43,8 @@ uv sync --group bundle
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
 
-# 构建 MaaEnd 补丁，首次运行会下载上游源码和依赖
-uv run python patch.py build --app /Applications/MaaEnd.app --mxu-source .cache/sources/MXU
+# 构建独立控制器适配层，不再下载或编译 MXU
+uv run python patch.py build --app /Applications/MaaEnd.app
 
 # 打包可复用于后续 MaaEnd 更新的一键补丁
 uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/desktop

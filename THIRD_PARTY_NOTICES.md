@@ -6,5 +6,6 @@ EndPlayDesktop 包含针对以下项目的源码补丁及原有上下文，保�
 | --- | --- | --- |
 | MaaEnd | <https://github.com/MaaEnd/MaaEnd> | AGPL-3.0 |
 | MXU | <https://github.com/MistEO/MXU> | AGPL-3.0 |
+| MaaFramework C API 类型布局 / C API layouts | <https://github.com/MaaXYZ/MaaFramework> | [LGPL-3.0](./licenses/MaaFramework-LGPL-3.0.md) |
 
 完整许可证见 [LICENSE](./LICENSE)。Full license text is provided in [LICENSE](./LICENSE).

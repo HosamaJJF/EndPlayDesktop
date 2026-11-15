@@ -1,6 +1,6 @@
 [project]
 name = "endplaydesktop"
-version = "0.0.5"
+version = "0.0.6"
 description = "Endfield PlayCover desktop input and MaaEnd app patch"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +12,11 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
 
 [dependency-groups]
 bundle = [

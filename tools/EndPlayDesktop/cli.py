@@ -19,12 +19,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_runtime(install: Path) -> None:
-    from maa.library import Library
-    from maa.toolkit import Toolkit
-
     binary = install / "maafw"
     if not binary.is_dir():
         raise FileNotFoundError(f"找不到 MaaFramework 目录: {binary}")
+    # maafw initializes its library directory during package import. Point it at
+    # the selected app before importing, including in a frozen runtime.
+    os.environ["MAAFW_BINARY_PATH"] = str(binary.resolve())
+    from maa.library import Library
+    from maa.toolkit import Toolkit
     Library.open(binary)
     if not Toolkit.init_option(install / "debug/EndPlayDesktop"):
         raise RuntimeError("MaaFramework 日志初始化失败")
@@ -105,7 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--maatools-address", default="127.0.0.1:1717")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="读取插件状态，不建立自动化输入会话")
-    commands.add_parser("sidecar", help="为适配版 MXU 提供私有控制器通道")
+    commands.add_parser("sidecar", help="为独立控制器适配层提供私有通道")
+    agent = commands.add_parser("agent-exec", help=argparse.SUPPRESS)
+    agent.add_argument("arguments", nargs=argparse.REMAINDER)
     launch = commands.add_parser("launch-game", help="打开 PlayCover 终末地并等待固定间隔")
     launch.add_argument("options", nargs="?", default="{}", help="MXU 预任务选项 JSON")
     launch.add_argument("--timeout", type=float, default=90)
@@ -121,6 +125,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     configure_logging(gui=args.command == "launch-game" and args.gui_log)
     try:
+        if args.command == "agent-exec":
+            from .agent_launch import exec_agent
+            exec_agent(args.arguments)
+            return 0
         if args.command == "launch-game":
             from .lifecycle import launch_game
 

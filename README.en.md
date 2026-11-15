@@ -28,9 +28,11 @@ Install the community PlayCover fork above, Endfield, and MaaEnd first, then ena
 
 The patch preserves MaaEnd's existing features and marks Windows tasks and upstream PlayCover launch/close tasks as compatible with EndPlayDesktop. Compatibility labels do not mean every task has been tested. Launch and close reuse MaaEnd's existing tasks without adding dedicated tasks or Pipelines. The target app keeps its own Go/C++ Agents, MaaFramework, and business resources. Reapply the same tool after ordinary MaaEnd updates without rebuilding Agents for each release. Keep the game window neither minimized nor hidden; it can run in the background without taking over the keyboard or mouse.
 
+The new launcher and controller adapter retain the upstream MXU executable. Older installations restore it from a matching unmodified backup; if that backup is missing, reinstall official MaaEnd before applying the new patch. The tool also reclaims unused runtimes and adds Clear Backups and Clean Unused Runtimes buttons. Runtimes referenced by current installations or retained backups are kept.
+
 ## Build from source
 
-Requires Xcode, CMake, Ninja, Git, Node.js 22, pnpm, Rust, Tauri, and uv. Run these commands from the repository root:
+Requires Xcode, CMake, Ninja, and uv. Run these commands from the repository root:
 
 ```bash
 uv sync --group bundle
@@ -39,8 +41,8 @@ uv sync --group bundle
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build
 
-# Build the MaaEnd patch; the first run downloads upstream sources and dependencies
-uv run python patch.py build --app /Applications/MaaEnd.app --mxu-source .cache/sources/MXU
+# Build the controller adapter without downloading or compiling MXU
+uv run python patch.py build --app /Applications/MaaEnd.app
 
 # Package the controller patch for reuse across MaaEnd updates
 uv run --group bundle python -m tools.EndPlayDesktop.build_app --payload .cache/payloads/desktop

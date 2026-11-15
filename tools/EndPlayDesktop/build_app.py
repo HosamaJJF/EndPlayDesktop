@@ -20,9 +20,18 @@ def run(*args: str) -> None:
     subprocess.run(args, cwd=ROOT, check=True)
 
 
+def archive_file(archive: zipfile.ZipFile, path: Path, name: str) -> None:
+    # File timestamps must not create a different runtime build ID for the
+    # exact same source and payload on a subsequent checkout/build.
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o100644 << 16
+    archive.writestr(info, path.read_bytes())
+
+
 def archive_source(destination: Path) -> None:
     entries = []
-    for folder in ("src", "tests", "tools", "patches", "packaging", "docs"):
+    for folder in ("src", "tests", "tools", "patches", "packaging", "docs", "licenses"):
         entries.extend(p for p in (ROOT / folder).rglob("*") if p.is_file()
                        and "__pycache__" not in p.parts and p.suffix != ".pyc")
     entries.extend(ROOT / name for name in (
@@ -30,7 +39,7 @@ def archive_source(destination: Path) -> None:
         "pyproject.toml", "uv.lock", "patch.py", ".gitignore", ".gitattributes"))
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(entries):
-            archive.write(path, str(path.relative_to(ROOT)))
+            archive_file(archive, path, str(path.relative_to(ROOT)))
 
 
 def smoke_runtime(app: Path) -> None:
@@ -40,7 +49,8 @@ def smoke_runtime(app: Path) -> None:
     result = subprocess.run([str(executable), "--runtime-check"], cwd="/tmp", env=env,
                             capture_output=True, text=True, check=True, timeout=30)
     report = json.loads(result.stdout)
-    if not report.get("frozen") or not report.get("sidecar_import") or not report.get("lifecycle_import"):
+    if (not report.get("frozen") or not report.get("sidecar_import") or not report.get("lifecycle_import")
+            or report.get("maafw_loaded") is not False):
         raise ValueError("Frozen runtime check failed")
     print("Frozen runtime:", json.dumps(report))
     requests = [{"op": "connected", "args": []}, {"op": "close", "args": []}]
@@ -62,6 +72,19 @@ def smoke_runtime(app: Path) -> None:
     if remaining:
         raise ValueError("Unexpected sidecar output")
     print("Frozen sidecar protocol: passed without connecting to the game")
+    agent_env = {**env, "PI_CONTROLLER": '{"name":"EndPlayDesktop","type":"PlayCover"}',
+                 "ENDPLAYDESKTOP_ADAPTER_LOADED": "1", "ENDPLAYDESKTOP_CONFIG": "/unused"}
+    program = (
+        "import json,os,sys; "
+        "assert json.loads(os.environ['PI_CONTROLLER'])['type']=='MacOS'; "
+        "assert 'ENDPLAYDESKTOP_CONFIG' not in os.environ; "
+        "assert 'ENDPLAYDESKTOP_ADAPTER_LOADED' not in os.environ; "
+        "assert sys.argv[1:] == ['argument with spaces','ipc:///tmp/maa.sock']"
+    )
+    subprocess.run([str(executable), "-m", "tools.EndPlayDesktop", "agent-exec", "--",
+                    sys.executable, "-c", program, "argument with spaces", "ipc:///tmp/maa.sock"],
+                   cwd="/tmp", env=agent_env, capture_output=True, check=True, timeout=30)
+    print("Frozen Agent forwarding: passed with desktop kind and original arguments")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--payload", type=Path, default=ROOT / ".cache/payloads/desktop")
     args = parser.parse_args(argv)
     payload = args.payload.resolve(strict=True)
-    load_payload(payload)
+    manifest, _ = load_payload(payload)
+    if manifest["format"] != 3:
+        raise ValueError("Rebuild the external controller payload before bundling; do not ship the legacy MXU replacement")
     version = re.search(r'^version\s*=\s*"([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.MULTILINE).group(1)
     assets = ROOT / ".cache/app-assets"
     if assets.exists():
@@ -78,11 +103,11 @@ def main(argv: list[str] | None = None) -> int:
     runtime = assets / "runtime_source/tools/EndPlayDesktop"
     runtime.mkdir(parents=True)
     (runtime.parent / "__init__.py").write_text("")
-    for name in ("__init__.py", "__main__.py", "cli.py", "client.py", "capture.py", "controller.py", "pitch.py", "sidecar.py", "lifecycle.py", "log_output.py"):
+    for name in ("__init__.py", "__main__.py", "cli.py", "client.py", "capture.py", "controller.py", "maa_controller.py", "pitch.py", "sidecar.py", "lifecycle.py", "log_output.py", "agent_launch.py"):
         shutil.copy2(ROOT / "tools/EndPlayDesktop" / name, runtime / name)
     with zipfile.ZipFile(assets / "payloads.zip", "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in ("mxu", "manifest.json"):
-            archive.write(payload / name, "desktop/" + name)
+        for name in ["manifest.json", *(entry["path"] for entry in manifest["files"].values())]:
+            archive_file(archive, payload / name, "desktop/" + name)
     archive_source(assets / "EndPlayDesktop-source.zip")
     build_id = hashlib.sha256((digest(assets / "EndPlayDesktop-source.zip") + digest(assets / "payloads.zip")).encode()).hexdigest()[:12]
     write_json(assets / "distribution.json", {
