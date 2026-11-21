@@ -206,11 +206,11 @@ def resource_changes(directory: Path, runtime: Path, runtime_python: Path | None
 
 def load_payload(payload: Path) -> tuple[dict, str]:
     manifest = read_json(payload / "manifest.json")
-    if manifest.get("format") not in (2, 3):
+    if manifest.get("format") not in (2, 3, 4):
         raise ValueError("Unsupported patch payload format; rebuild the controller payload")
     if manifest.get("architecture") != "arm64":
         raise ValueError("Only the Apple Silicon payload is supported")
-    expected = {"mxu"} if manifest["format"] == 2 else {"controller", "launcher"}
+    expected = {2: {"mxu"}, 3: {"controller", "launcher"}, 4: {"controller"}}[manifest["format"]]
     if set(manifest["files"]) != expected:
         raise ValueError("Unexpected patch payload files; upstream executables must be preserved")
     for name in manifest["files"]:
@@ -223,7 +223,7 @@ def check_mxu_replacement(app: Path, payload: Path, manifest: dict | None = None
     """Require consent whenever applying would replace a different MXU build."""
     if manifest is None:
         manifest, _ = load_payload(payload)
-    if manifest["format"] == 3:
+    if manifest["format"] in (3, 4):
         return
     info, directory, _ = app_info(app)
     if executable_identity(directory / info["CFBundleExecutable"]) != executable_identity(
@@ -233,7 +233,7 @@ def check_mxu_replacement(app: Path, payload: Path, manifest: dict | None = None
 
 def original_agent(app: Path, receipt: dict, version: str) -> Path | None:
     """Recover an Agent overwritten by v1 patches, never from another release."""
-    if not receipt or receipt.get("format") in (2, 3):
+    if not receipt or receipt.get("format") in (2, 3, 4):
         return None
     if receipt.get("format") != 1:
         raise ValueError("Unsupported EndPlayDesktop receipt format")
@@ -338,7 +338,7 @@ def apply_patch(app: Path, payload: Path, runtime: Path, backups: Path,
     if running(app):
         raise ValueError("Quit MaaEnd before applying the patch")
     manifest, payload_id = load_payload(payload)
-    if manifest["format"] == 3:
+    if manifest["format"] in (3, 4):
         from .adapter_patch import apply_adapter_patch
         return apply_adapter_patch(app, payload, runtime, backups, runtime_python, manifest, payload_id)
     if not replace_mxu:
@@ -427,15 +427,15 @@ def main(argv: list[str] | None = None) -> int:
             payload = (args.payload or ROOT / ".cache/payloads/desktop").resolve()
             if args.command == "plan":
                 manifest, payload_id = load_payload(payload)
-                changes, filters = resource_changes(directory, ROOT, external=manifest["format"] == 3)
+                changes, filters = resource_changes(directory, ROOT, external=manifest["format"] in (3, 4))
                 receipt = read_json(app / RECEIPT) if (app / RECEIPT).exists() else {}
                 agent = original_agent(app, receipt, version)
                 result = {"app": str(app), "version": version, "payload_id": payload_id,
                           "resource_files": [str(p) for p in changes], "changed_controller_filters": filters,
-                          "excluded": list(EXCLUDED), "executables": ["MXU"] if manifest["format"] == 2 else ["EndPlayDesktopLauncher", "controller adapter"],
+                          "excluded": list(EXCLUDED), "executables": {2: ["MXU"], 3: ["EndPlayDesktopLauncher", "controller adapter"], 4: ["controller adapter"]}[manifest["format"]],
                           "recover_agent_from": str(agent) if agent else None,
                           "mxu_version": manifest.get("mxu_version"), "mxu_commit": manifest.get("mxu_commit")}
-                if manifest["format"] == 3:
+                if manifest["format"] in (3, 4):
                     from .adapter_patch import upstream_client
                     _, donor = upstream_client(app, receipt, version)
                     result.update(recover_mxu_from=str(donor) if donor else None,

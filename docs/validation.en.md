@@ -2,6 +2,13 @@
 
 [中文](./validation.md)
 
+## 2026-11-16: menu bar and background window recovery
+
+- Version 0.0.7 uses a format 4 adapter payload and keeps the original GUI as the app entry point. A dylib dependency is added in existing Mach-O header padding, preserving sections, offsets, build UUID and entitlements before re-signing.
+- All 112 Python tests and 11 native tests passed, including dependency loading, controller forwarding, header validation and AppKit reopen forwarding and hidden-window recovery.
+- First installation on an official MaaEnd v3.2.0-beta.2 copy preserved all 31 file-backed Mach-O sections, the entry point and build UUID. Full signature verification and repeated installation passed.
+- Normal app launch produced a menu bar item with height 30. Closing hid the window while retaining the process; reopening from Finder restored the window under the same PID. Testing used an isolated profile without game tasks. Direct migration from older patches is outside the delivery guarantee.
+
 ## 2026-11-01: 0.0.5 test-package build
 
 - Set project, CMake, and lockfile versions to `0.0.5`; update the one-click instructions and release notes.

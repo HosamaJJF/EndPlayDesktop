@@ -174,7 +174,7 @@ def main() -> int:
                     raise ValueError("Quit MaaEnd before applying the patch")
                 payload = distribution.install_payload()
                 manifest, _ = load_payload(payload)
-                if manifest["format"] != 3:
+                if manifest["format"] != 4:
                     raise ValueError("请重新构建独立控制器载荷；新版补丁工具不再分发或替换 MXU。")
                 runtime = distribution.install_runtime()
                 return self.with_cleanup(target, lambda: apply_patch(

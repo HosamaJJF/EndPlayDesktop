@@ -2,6 +2,7 @@
 // public CustomController API. No MXU internals or C++ framework ABI are used.
 #import <Foundation/Foundation.h>
 #include "MaaABI.h"
+#include "AppLifecycle.h"
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <signal.h>
@@ -213,7 +214,16 @@ void destroy(MaaController* controller) {
 } // namespace
 
 __attribute__((constructor)) static void adapterLoaded() {
-    setenv("ENDPLAYDESKTOP_ADAPTER_LOADED", "1", 1);
+    @autoreleasepool {
+        Dl_info location{};
+        if (!dladdr(reinterpret_cast<const void*>(adapterLoaded), &location) || !location.dli_fname) return;
+        NSString* path = [[NSString stringWithUTF8String:location.dli_fname] stringByResolvingSymlinksInPath];
+        NSString* config = [path.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"runtime.json"];
+        if (access(config.fileSystemRepresentation, R_OK)) return;
+        setenv("ENDPLAYDESKTOP_CONFIG", config.fileSystemRepresentation, 1);
+        setenv("ENDPLAYDESKTOP_ADAPTER_LOADED", "1", 1);
+        epd::installApplicationLifecycle();
+    }
 }
 
 // MXU uses libloading/dlsym, so intercept this public dynamic-loader boundary

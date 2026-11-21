@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     payload = args.payload.resolve(strict=True)
     manifest, _ = load_payload(payload)
-    if manifest["format"] != 3:
+    if manifest["format"] != 4:
         raise ValueError("Rebuild the external controller payload before bundling; do not ship the legacy MXU replacement")
     version = re.search(r'^version\s*=\s*"([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.MULTILINE).group(1)
     assets = ROOT / ".cache/app-assets"

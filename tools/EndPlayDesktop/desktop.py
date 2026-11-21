@@ -219,8 +219,8 @@ def cleanup_storage(app: Path, support: Path = SUPPORT) -> dict:
                 if not metadata.is_file():
                     continue
                 data = read_json(metadata)
-                expected = {"mxu"} if data.get("format") == 2 else {"controller", "launcher"}
-                if data.get("format") not in (2, 3) or set(data.get("files", {})) != expected:
+                expected = {2: {"mxu"}, 3: {"controller", "launcher"}, 4: {"controller"}}.get(data.get("format"))
+                if expected is None or set(data.get("files", {})) != expected:
                     continue
             shutil.rmtree(entry)
             removed[folder] += 1

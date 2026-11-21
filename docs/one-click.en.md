@@ -16,7 +16,7 @@ The app name, MaaEnd version, official update sources, and existing task logic r
 
 Tools through 0.0.2 replaced Go Agent. Migration restores it from a matching unpatched backup. If that backup is missing, reinstall the current official MaaEnd app once, then apply this tool. Keep the task configuration.
 
-The new tool uses a separate launcher and controller adapter while retaining MaaEnd's upstream MXU executable. Migration from older patches restores MXU from a matching unmodified backup. If no backup is available, reinstall the current official MaaEnd before applying this tool. Select EndPlayDesktop again and submit the actual connection address. Launch the normal `MaaEnd.app`. Incompatible future API, loading, or signing changes may still require an updated adapter.
+The original MaaEnd entry point now loads the controller adapter directly, fixing the menu bar and window recovery issues in 0.0.6. Apply the patch to a complete official MaaEnd installation. Users of older patches can reinstall the current official MaaEnd first without deleting task settings. Select EndPlayDesktop again and submit the actual connection address. Launch the normal `MaaEnd.app`. Incompatible future API, loading, or signing changes may still require an updated adapter.
 
 ## Launching and closing the game
 

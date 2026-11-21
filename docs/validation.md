@@ -2,6 +2,13 @@
 
 [English](./validation.en.md)
 
+## 2026-11-16：菜单栏与后台窗口恢复
+
+- 0.0.7 载荷改为 format 4，移除 GUI 启动器，保留原版应用入口；通过现有 Mach-O 头部空闲空间添加适配层依赖，保留程序 section、偏移、UUID 与 entitlements，并重新签名。
+- 112 项 Python 测试和 11 项原生测试通过，覆盖头部空间与结构校验、重复应用、恢复、上游更新、适配层加载、控制器透传及 AppKit Reopen 原回调转发与隐藏窗口恢复。
+- 在原版 MaaEnd v3.2.0-beta.2 副本首次应用补丁，31 个有内容的 Mach-O section 均未改变，原入口与构建 UUID 保留，完整签名和重复安装检查通过。
+- 正常 `.app` 启动后真实菜单栏项高度为 30；关闭窗口后后台进程保持，从 Finder 重新打开后同一 PID 的窗口恢复。使用独立配置验证，未执行游戏任务；不将旧版直接迁移作为交付保证。详见[排查与修复记录](./macos-tray-launcher.md)。
+
 ## 2026-11-15：独立控制器与存储回收
 
 - 默认载荷改为独立启动器和 MaaFramework C API 适配层，不再编译或分发固定版 MXU。原生 PlayCover 控制器透传；EndPlayDesktop 标记转为自定义控制器，Agent 经透明启动命令使用 `MacOS` 桌面类型。

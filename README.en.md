@@ -28,7 +28,7 @@ Install the community PlayCover fork above, Endfield, and MaaEnd first, then ena
 
 The patch preserves MaaEnd's existing features and marks Windows tasks and upstream PlayCover launch/close tasks as compatible with EndPlayDesktop. Compatibility labels do not mean every task has been tested. Launch and close reuse MaaEnd's existing tasks without adding dedicated tasks or Pipelines. The target app keeps its own Go/C++ Agents, MaaFramework, and business resources. Reapply the same tool after ordinary MaaEnd updates without rebuilding Agents for each release. Keep the game window neither minimized nor hidden; it can run in the background without taking over the keyboard or mouse.
 
-The new launcher and controller adapter retain the upstream MXU executable. Older installations restore it from a matching unmodified backup; if that backup is missing, reinstall official MaaEnd before applying the new patch. The tool also reclaims unused runtimes and adds Clear Backups and Clean Unused Runtimes buttons. Runtimes referenced by current installations or retained backups are kept.
+The original MaaEnd entry point now loads the controller adapter directly, retaining upstream MXU code and supporting the menu bar and Dock window recovery. The patch adds a dylib dependency in existing Mach-O header padding and re-signs the app. Apply it to a complete official MaaEnd installation. The tool also reclaims unused runtimes and provides Clear Backups and Clean Unused Runtimes buttons.
 
 ## Build from source
 

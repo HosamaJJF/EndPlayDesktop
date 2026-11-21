@@ -1,4 +1,4 @@
-"""Exercise the actual launcher, dyld adapter and child lifetime without a game."""
+"""Exercise the linked adapter and child lifetime without a launcher or game."""
 import json
 import os
 import plistlib
@@ -8,9 +8,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.EndPlayDesktop.macho import add_adapter_dependency
+
 
 def main():
-    launcher, adapter, client, framework = map(Path, sys.argv[1:])
+    adapter, client, framework = map(Path, sys.argv[1:])
     with tempfile.TemporaryDirectory(prefix="endplaydesktop adapter ") as temporary:
         root = Path(temporary)
         app = root / "MaaEnd.app/Contents"
@@ -18,10 +21,11 @@ def main():
         binary = app / "MacOS"
         resources.mkdir(parents=True)
         binary.mkdir()
-        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": launcher.name,
+        (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "upstream-client",
             "CFBundleIdentifier": "test.endplaydesktop.adapter", "CFBundlePackageType": "APPL"}))
-        shutil.copy2(launcher, binary / launcher.name)
         shutil.copy2(client, binary / "upstream-client")
+        add_adapter_dependency(binary / "upstream-client")
+        subprocess.run(["codesign", "--force", "--sign", "-", str(binary / "upstream-client")], check=True)
         shutil.copy2(adapter, resources / adapter.name)
         project = root / "runtime project"
         module = project / "tools/EndPlayDesktop"
@@ -53,7 +57,7 @@ with open(os.environ["EPD_TEST_TRACE"], "a") as trace:
         }))
         env = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
         env["EPD_TEST_TRACE"] = str(trace)
-        subprocess.run([str(binary / launcher.name), str(framework), "argument with spaces"],
+        subprocess.run([str(binary / "upstream-client"), str(framework), "argument with spaces"],
                        cwd=root, env=env, check=True, timeout=20)
         operations = [json.loads(line) for line in trace.read_text().splitlines()]
         assert [item["op"] for item in operations] == ["connect", "connected", "screencap", "touch_down", "touch_move",

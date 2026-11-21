@@ -2,9 +2,12 @@
 #include <cassert>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <CoreFoundation/CoreFoundation.h>
 int main(int argc, char** argv) {
     assert(argc == 3 && !strcmp(argv[2], "argument with spaces"));
+    assert(!getenv("DYLD_INSERT_LIBRARIES"));
+    assert(getenv("ENDPLAYDESKTOP_ADAPTER_LOADED") && !strcmp(getenv("ENDPLAYDESKTOP_ADAPTER_LOADED"), "1"));
     assert(CFEqual(CFBundleGetIdentifier(CFBundleGetMainBundle()), CFSTR("test.endplaydesktop.adapter")));
     void* library = dlopen(argv[1], RTLD_NOW);
     if (!library) { fprintf(stderr, "%s\n", dlerror()); return 1; }

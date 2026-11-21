@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .macho import add_adapter_dependency, has_adapter_dependency
 from .patch import (RECEIPT, app_info, contained, copy_app, digest, executable_identity,
                     original_agent, read_json, resource_changes, sign_app, swap_app,
                     verify_app, verify_original, write_json)
@@ -19,9 +20,8 @@ CONFIG = Path("Contents/Resources/EndPlayDesktop/runtime.json")
 
 
 def sign_upstream(executable: Path) -> None:
-    # Changing CFBundleExecutable invalidates the original binary's signed
-    # Info.plist slot. Refresh its signature, keeping upstream code, UUID and
-    # entitlements. Never substitute a binary built from an older MXU source.
+    # The dependency changes the Mach-O header, preserving upstream sections,
+    # UUID and entitlements. Refresh the signature before sealing the bundle.
     subprocess.run(["codesign", "--force", "--sign", "-",
                     "--preserve-metadata=identifier,entitlements,flags,runtime", str(executable)], check=True)
 
@@ -61,6 +61,8 @@ def upstream_client(app: Path, receipt: dict, version: str) -> tuple[str, Path |
 
 def apply_adapter_patch(app: Path, payload: Path, runtime: Path, backups: Path,
                         runtime_python: Path | None, manifest: dict, payload_id: str) -> dict:
+    if manifest["format"] != 4:
+        raise ValueError("旧启动器载荷存在菜单栏兼容问题，请重新构建 format 4 控制器载荷。")
     info, directory, version = app_info(app)
     existing = read_json(app / RECEIPT) if (app / RECEIPT).exists() else {}
     name, donor = upstream_client(app, existing, version)
@@ -68,12 +70,14 @@ def apply_adapter_patch(app: Path, payload: Path, runtime: Path, backups: Path,
     changes, filters = resource_changes(directory, runtime, runtime_python, external=True)
     python = runtime_python.absolute() if runtime_python else runtime.resolve() / ".venv/bin/python"
     config = {"format": 1, "python": str(python), "project_dir": str(runtime.resolve()), "upstream_executable": name}
-    identity = executable_identity(donor or directory / name)
-    if (existing.get("format") == 3 and existing.get("payload_id") == payload_id and not changes
-            and existing.get("upstream_identity") == identity and info["CFBundleExecutable"] == LAUNCHER
+    client = contained(directory, name)
+    identity = executable_identity(donor or client)
+    if (existing.get("format") == 4 and existing.get("payload_id") == payload_id and not changes
+            and existing.get("maaend_version") == version
+            and existing.get("upstream_identity") == identity and info["CFBundleExecutable"] == name
             and (app / CONFIG).is_file() and read_json(app / CONFIG) == config
             and (app / ADAPTER).is_file() and digest(app / ADAPTER) == manifest["files"]["controller"]["sha256"]
-            and executable_identity(directory / LAUNCHER) == executable_identity(contained(payload, manifest["files"]["launcher"]["path"]))):
+            and not (directory / LAUNCHER).exists() and has_adapter_dependency(directory / name)):
         verify_app(app)
         return {"status": "already_applied", "version": version, "preserves_upstream_mxu": True}
     verify_original(app)
@@ -86,27 +90,29 @@ def apply_adapter_patch(app: Path, payload: Path, runtime: Path, backups: Path,
         staged = Path(temporary) / app.name
         copy_app(app, staged)
         target = staged / "Contents/MacOS"
+        client = contained(target, name)
         for relative, value in changes.items():
             if value is None:
                 contained(target, relative).unlink()
             else:
                 write_json(target / relative, value)
         if donor is not None:
-            shutil.copy2(donor, target / name)
+            shutil.copy2(donor, client)
         if agent is not None:
             shutil.copy2(agent, target / "agent/go-service")
         (staged / ADAPTER).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(contained(payload, manifest["files"]["controller"]["path"]), staged / ADAPTER)
-        shutil.copy2(contained(payload, manifest["files"]["launcher"]["path"]), target / LAUNCHER)
-        (target / LAUNCHER).chmod(0o755)
-        (staged / "Contents/Info.plist").write_bytes(plistlib.dumps({**info, "CFBundleExecutable": LAUNCHER}))
+        add_adapter_dependency(client)
+        (target / LAUNCHER).unlink(missing_ok=True)
+        if info["CFBundleExecutable"] != name:
+            (staged / "Contents/Info.plist").write_bytes(plistlib.dumps({**info, "CFBundleExecutable": name}))
         write_json(staged / CONFIG, config)
         write_json(staged / RECEIPT, {
-            "format": 3, "payload_id": payload_id, "maaend_version": version,
+            "format": 4, "payload_id": payload_id, "maaend_version": version,
             "backup": str(backup), "runtime": str(runtime.resolve()),
             "upstream_executable": name, "upstream_identity": identity,
         })
-        sign_upstream(target / name)
+        sign_upstream(client)
         sign_app(staged, [target / relative for relative, value in changes.items() if value is not None])
         swap_app(app, staged)
     return {"status": "applied", "version": version, "backup": str(backup), "changed_resource_files": len(changes),

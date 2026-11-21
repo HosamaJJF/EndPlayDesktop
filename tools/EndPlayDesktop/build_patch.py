@@ -101,14 +101,14 @@ def build_legacy_payload(app: Path, mxu_source: Path, mxu_binary: Path | None = 
 
 
 def build_payload(app: Path, target_dir: Path | None = None) -> dict:
-    """Build only the launcher and C ABI adapter; never ship a frozen MXU."""
+    """Build the C ABI adapter; keep the original GUI as the app entry point."""
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("Build on an Apple Silicon Mac")
     _, _, version = app_info(app)
     target = (target_dir or ROOT / "build").resolve()
     run("cmake", "-S", str(ROOT), "-B", str(target), "-G", "Ninja",
         "-DCMAKE_BUILD_TYPE=RelWithDebInfo", cwd=ROOT)
-    run("cmake", "--build", str(target), "--target", "EndPlayDesktopController", "EndPlayDesktopLauncher", cwd=ROOT)
+    run("cmake", "--build", str(target), "--target", "EndPlayDesktopController", cwd=ROOT)
     cache = ROOT / ".cache/payloads"
     cache.mkdir(parents=True, exist_ok=True)
     destination = cache / "desktop"
@@ -116,13 +116,13 @@ def build_payload(app: Path, target_dir: Path | None = None) -> dict:
         payload = Path(temporary) / "desktop"
         payload.mkdir()
         files = {}
-        for key, filename in (("controller", "libEndPlayDesktopController.dylib"), ("launcher", "EndPlayDesktopLauncher")):
+        for key, filename in (("controller", "libEndPlayDesktopController.dylib"),):
             shutil.copy2(target / filename, payload / filename)
             arch = subprocess.check_output(["lipo", "-archs", str(payload / filename)], text=True).strip()
             if arch != "arm64":
                 raise ValueError(f"Unexpected architecture: {filename} ({arch})")
             files[key] = {"path": filename, "sha256": digest(payload / filename)}
-        write_json(payload / "manifest.json", {"format": 3, "architecture": "arm64",
+        write_json(payload / "manifest.json", {"format": 4, "architecture": "arm64",
                    "reference_maaend_version": version, "files": files})
         if destination.exists():
             shutil.rmtree(destination)
